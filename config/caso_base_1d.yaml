@@ -1,0 +1,71 @@
+# Caso base 1D: columna vertical en el eje de la fundación (suelo + hormigón).
+#
+# Por qué 1D vertical: Ju y Lei (2019, sec. 3.1.3) miden temperaturas casi iguales
+# en puntos de la misma altura, porque el espesor (3,3 m) es mucho menor que la
+# planta (18 m). El gradiente relevante es el vertical. Al no considerar
+# pérdidas laterales, el modelo 1D es conservador para Tmax en el núcleo.
+#
+# Unidades SI: m, s, W, J, kg, °C.
+# [JL19] = Ju y Lei (2019), Tabla 2 y ec. (2)-(3).
+# [SUPUESTO] = valor provisorio que hay que justificar o reemplazar.
+
+nombre: caso_base_1d
+
+materiales:
+  hormigon_c35:
+    es_hormigon: true
+    k: 2.222        # W/(m K)   = 8.0 kJ/(m h °C)   [JL19]
+    rho: 2400       # kg/m3                         [JL19]
+    cp: 970         # J/(kg K)  = 0.97 kJ/(kg °C)   [JL19]
+    hidratacion:
+      modelo: ju_lei_2019
+      Eh_R: 2400    # K                             [JL19, ec. 3]
+      T_ref_C: 20   # °C (T0 = 293.15 K)            [JL19, ec. 3]
+  suelo:
+    k: 1.389        # W/(m K)   = 5.0 kJ/(m h °C)   [JL19]
+    rho: 1800       # kg/m3                         [JL19]
+    cp: 1273        # J/(kg K)  = 1.273 kJ/(kg °C)  [JL19]
+
+# Capas de abajo hacia arriba.
+capas:
+  - nombre: suelo
+    material: suelo
+    espesor: 5.0    # m [SUPUESTO] En 14 días el calor penetra ~ sqrt(alpha*t) ~ 0.9 m en el suelo
+    T_inicial: 15.0 # °C [SUPUESTO] reemplazar con temperatura de suelo del sitio
+  - nombre: hormigon
+    material: hormigon_c35
+    espesor: 3.30   # m [JL19] espesor total en el eje
+    T_inicial: 20.0 # °C temperatura de colocación (DECISIÓN del plan)
+
+bordes:
+  inferior:
+    tipo: dirichlet
+    T: 15.0         # °C [SUPUESTO] temperatura del suelo profundo
+  superior:
+    tipo: robin
+    h: 27.8         # W/(m2 K) = 100 kJ/(m2 h °C), hormigón-aire [JL19]
+    T_amb:          # [SUPUESTO] VALORES ILUSTRATIVOS hasta conectar Open-Meteo (Litueche)
+      tipo: sinusoidal
+      media: 16.0
+      amplitud: 7.0
+      hora_max: 15  # hora del día con la máxima temperatura
+    # Para probar una manta de aislación sobre la superficie, descomentar:
+    # aislacion: {espesor: 0.05, k: 0.04}   # m, W/(m K)
+
+malla:
+  dz: 0.05          # m (tamaño objetivo de celda)
+
+tiempo:
+  duracion_h: 336   # 14 días (horizonte del proyecto)
+  hora_inicio: 8    # hora del día en que se coloca el hormigón (DECISIÓN del plan)
+  dt_s: auto        # "auto" = mayor paso estable x factor_seguridad, sin superar dt_max_s
+  factor_seguridad: 0.9
+  dt_max_s: 600     # por precisión: con dt <= 600 s, Tmax y dTmax cambian < 0.1 °C (estudio de dt)
+  guardar_cada_h: 1.0
+
+criterios:
+  Tmax_C: 70
+  dT_C: 20
+  profundidad_superficie_m: 0.025   # Tmin se mide 25 mm bajo la superficie
+
+salida: ../resultados/caso_base_1d

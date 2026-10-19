@@ -1,0 +1,13 @@
+# Sitio asignado al Grupo 4 ("Sitios de construcción por grupo").
+# Esta coordenada es el punto meteorológico oficial del caso docente: todos los
+# scripts de clima deben usar exactamente estos valores.
+grupo: G4
+sitio: Litueche
+region: O'Higgins
+proyecto_eolico_referencia: Parque Eolico Manantiales / cluster eolico de Litueche
+latitud: -34.105457
+longitud: -71.649539
+fuente: https://www.sea.gob.cl/tce/tabla-de-comision-de-evaluacion-175
+nota: >
+  Punto de referencia climática del curso, no la coordenada exacta de una
+  fundación real de aerogenerador.

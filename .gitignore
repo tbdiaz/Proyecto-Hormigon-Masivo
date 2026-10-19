@@ -1,0 +1,21 @@
+# Entorno virtual y cachés de Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+# Resultados regenerables (se recrean con `mcplan simular1d ...`)
+resultados/
+
+# Respaldos que deja Blender/Bonsai al guardar
+*.blend1
+*.ifc~
+
+# Sistema operativo / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

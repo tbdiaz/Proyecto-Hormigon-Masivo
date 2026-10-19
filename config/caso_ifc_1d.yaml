@@ -1,0 +1,69 @@
+# Igual que caso_base_1d, pero el hormigón se lee desde el IFC:
+# una capa por vertida que atraviesa el eje (x = 0, y = 0), con su espesor
+# (geometría) y su TemperaturaColocacion_C (property set MCPlan_Vertida).
+#
+# Si se modifica el IFC en Bonsai y se guarda, esta simulación cambia sin
+# tocar el código.
+#
+# Simplificación de esta versión: todas las vertidas existen desde t = 0
+# (vertida monolítica). La activación por InicioPlanificado viene después.
+
+nombre: caso_ifc_1d
+
+materiales:
+  hormigon_c35:
+    es_hormigon: true
+    k: 2.222
+    rho: 2400
+    cp: 970
+    hidratacion:
+      modelo: ju_lei_2019
+      Eh_R: 2400
+      T_ref_C: 20
+  suelo:
+    k: 1.389
+    rho: 1800
+    cp: 1273
+
+capas:
+  - nombre: suelo
+    material: suelo
+    espesor: 5.0
+    T_inicial: 15.0
+
+hormigon_desde_ifc:
+  archivo: ../models/fundacion_base.ifc
+  material: hormigon_c35
+  x: 0.0
+  y: 0.0
+
+bordes:
+  inferior:
+    tipo: dirichlet
+    T: 15.0
+  superior:
+    tipo: robin
+    h: 27.8
+    T_amb:
+      tipo: sinusoidal
+      media: 16.0
+      amplitud: 7.0
+      hora_max: 15
+
+malla:
+  dz: 0.05
+
+tiempo:
+  duracion_h: 336
+  hora_inicio: 8
+  dt_s: auto
+  factor_seguridad: 0.9
+  dt_max_s: 600
+  guardar_cada_h: 1.0
+
+criterios:
+  Tmax_C: 70
+  dT_C: 20
+  profundidad_superficie_m: 0.025
+
+salida: ../resultados/caso_ifc_1d

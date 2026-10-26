@@ -76,6 +76,30 @@ def test_flujo_neumann_entra_completo():
     assert ganancia == pytest.approx(q * res.t[-1], rel=1e-10)
 
 
+class FuenteUniforme:
+    """Fuente constante q [W/m3] que no depende de la temperatura ni de la edad."""
+
+    def __init__(self, q):
+        self.q = q
+
+    def potencia(self, te_h, T_C, rho, cp):
+        return np.full_like(np.asarray(T_C, dtype=float), self.q)
+
+    def factor_arrhenius(self, T_C):
+        return np.ones_like(np.asarray(T_C, dtype=float))
+
+
+def test_fuente_uniforme_adiabatica_sube_linealmente():
+    """Guía G05, test 5: sin pérdidas y con fuente uniforme, dT/dt = q / (rho cp) en todo el dominio."""
+    q = 500.0
+    mat = Material("hormigon", k=2.222, rho=2400.0, cp=970.0, es_hormigon=True, hidratacion=FuenteUniforme(q))
+    malla = crear_malla([Capa(mat, 1.0, 20.0)], 0.05)
+    adiabatico = Borde.neumann(0.0)
+    res = simular(malla, adiabatico, adiabatico, t_final=2 * DIA)
+    esperado = 20.0 + q / (mat.rho * mat.cp) * res.t
+    np.testing.assert_allclose(res.T, np.repeat(esperado[:, None], malla.n, axis=1), rtol=1e-12)
+
+
 def test_converge_a_la_solucion_analitica_con_orden_dos():
     filas = estudio_convergencia([0.1, 0.05, 0.025])
     assert filas[-1].error_max < 5e-3

@@ -69,8 +69,17 @@ $$\Delta t \le \min_i \frac{C_i}{\sum G_i}$$
 Ejemplo (hormigón, $\alpha = 9{,}5\times10^{-7}$ m²/s, Δz = 0,05 m): Δt crítico ≈ 1310 s.
 
 Además de la estabilidad hay un límite por **precisión**: con mallas gruesas el paso estable
-supera 1 h, demasiado para seguir el calor de hidratación (el núcleo llega a subir ~5 °C/h). Por eso los
-casos usan `dt_max_s: 600`. Con dt ≤ 600 s, Tmax y ΔT cambian menos de 0,1 °C.
+supera 1 h, demasiado para seguir el calor de hidratación (el núcleo llega a subir ~5 °C/h).
+Euler explícito es de primer orden en el tiempo: al dividir Δt por 2, el error se divide por 2.
+Estudio de Δt en el caso base (Δz = 0,05 m):
+
+| Δt [s] | 600 | 300 | 150 | 60 | 30 |
+|---|---|---|---|---|---|
+| Tmax [°C] | 78,04 | 77,95 | 77,91 | 77,83 | 77,85 |
+| ΔTmax [°C] | 58,74 | 58,66 | 58,61 | 58,54 | 58,55 |
+
+Por eso los casos usan `dt_max_s: 150` (error ~0,07 °C frente a Δt = 30 s). En 1D cuesta menos de
+1 s; las diferencias de ±0,02 °C entre 60 y 30 s vienen de muestrear la salida cada 1 h.
 
 ## 6. Calor de hidratación (Ju y Lei 2019, ec. 2–4)
 
@@ -119,18 +128,35 @@ Observaciones:
 Orden 2: al dividir Δz por 2 el error se divide por 4 (con Δt ∝ Δz², el error temporal
 O(Δt) también es O(Δz²)).
 
-**Otros tests** (`pytest`): estado estacionario exacto con dos materiales y con Robin,
-conservación de la energía con bordes adiabáticos, flujo de Neumann, principio del máximo,
-rechazo y divergencia con Δt inestable, bloque adiabático que reproduce la curva del ensayo,
-y round-trip IFC.
+**Batería de tests** (`pytest`), que cubre en 1D los tests que recomienda la guía G05:
 
-## 9. Resultado del caso base (sin control térmico)
+| Guía G05 | Test |
+|---|---|
+| 1. Solución exacta 1D con convergencia | serie de Fourier, orden ≈ 2 |
+| 4. Energía adiabática constante | `sum(C_i T_i)` constante a precisión de máquina |
+| 5. Fuente uniforme: dT/dt = q/(ρc) | aumento lineal exacto |
+| 6. Neumann | flujo impuesto entra completo; q = 0 no pierde calor |
+| 7. Robin | estado estacionario exacto con resistencias en serie |
 
-`mcplan simular1d config/caso_base_1d.yaml` (colocación a 20 °C, 8:00 h, ambiente ilustrativo 16 ± 7 °C):
+Además: estacionario exacto con dos materiales (interfaz), principio del máximo, rechazo y
+divergencia con Δt inestable, bloque adiabático que reproduce la curva del ensayo, lectura del IFC
+(5 vertidas, volúmenes de la guía), detección de cambios, rayo vertical sobre los troncos y
+**puente IFC → solver**: la columna leída del IFC da el mismo resultado que el caso escrito a mano.
+Los tests 2D y 3D exactos vendrán con el solver 3D.
 
-- **Tmax ≈ 79,5 °C** a las 66 h, a 1,62 m sobre la base (centro del espesor). **No cumple** 70 °C.
-- **ΔTmax ≈ 58 °C** a las 93 h. **No cumple** 20 °C.
-- Independiente de la malla: entre Δz = 0,2 y 0,025 m, Tmax varía menos de 0,1 °C.
+## 9. Resultado de la columna del eje (sin control térmico)
+
+`mcplan simular1d config/caso_base_1d.yaml`: geometría oficial en el eje (4,30 m de hormigón: 3,30
+de fundación + 1,00 de pedestal), colocación a 18 °C a las 8:00 h, todas las vertidas desde t = 0 y
+ambiente ilustrativo de 16 ± 7 °C.
+
+- **Tmax ≈ 77,9 °C** a las 81 h, a 2,12 m sobre la base (centro del espesor). **No cumple** 70 °C.
+- **ΔTmax ≈ 58,6 °C** a las 141 h. **No cumple** 20 °C.
+- No depende de la malla: entre Δz = 0,2 y 0,025 m, Tmax varía 0,02 °C.
+- `caso_ifc_1d.yaml` (la misma columna leída del IFC) da exactamente lo mismo.
+
+Columna cerca del borde (x = 8,5 m: sólo 1,30 m de hormigón): Tmax ≈ 65,5 °C (cumple) pero
+ΔTmax ≈ 40,9 °C (no cumple). Una sección delgada se enfría más rápido, pero igual tiene gradiente.
 
 Es coherente con Ju y Lei: su Fundación 1, sin control, también excedió ambos límites
 (73 °C y 35 °C). Las diferencias son esperables, porque no se conocen su temperatura de
@@ -139,7 +165,8 @@ instantánea. **No es una validación**: es un orden de magnitud razonable.
 
 ## 10. Limitaciones actuales
 
-- Todas las vertidas existen desde t = 0 (sin activación temporal).
+- Todas las vertidas existen desde t = 0 (falta la activación según `Inicio_h`).
 - Ambiente sinusoidal ilustrativo (sin datos reales todavía).
-- Sin radiación solar ni pérdidas laterales.
-- Geometría con supuestos pendientes de validar con la geometría oficial del curso.
+- Sin radiación solar ni pérdidas laterales: la columna 1D ignora el enfriamiento por las caras
+  inclinadas y laterales del octágono.
+- Una sola columna por simulación; el campo completo requiere la voxelización 3D.

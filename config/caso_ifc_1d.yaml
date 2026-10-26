@@ -1,12 +1,14 @@
 # Igual que caso_base_1d, pero el hormigón se lee desde el IFC:
-# una capa por vertida que atraviesa el eje (x = 0, y = 0), con su espesor
-# (geometría) y su TemperaturaColocacion_C (property set MCPlan_Vertida).
+# una capa por vertida que atraviesa la vertical (x, y), con su espesor
+# (geometría real, por intersección de un rayo vertical con el sólido) y su
+# TemperaturaColocacion_C (property set UANDES_HormigonMasivo).
 #
 # Si se modifica el IFC en Bonsai y se guarda, esta simulación cambia sin
-# tocar el código.
+# tocar el código. Con x, y se puede estudiar otra columna (por ejemplo x = 8.5
+# cerca del borde, donde el hormigón mide 1.30 m).
 #
 # Simplificación de esta versión: todas las vertidas existen desde t = 0
-# (vertida monolítica). La activación por InicioPlanificado viene después.
+# (vertida monolítica). La activación según Inicio_h viene después.
 
 nombre: caso_ifc_1d
 
@@ -32,7 +34,7 @@ capas:
     T_inicial: 15.0
 
 hormigon_desde_ifc:
-  archivo: ../models/fundacion_base.ifc
+  archivo: ../geometry/foundation.ifc
   material: hormigon_c35
   x: 0.0
   y: 0.0
@@ -58,7 +60,7 @@ tiempo:
   hora_inicio: 8
   dt_s: auto
   factor_seguridad: 0.9
-  dt_max_s: 600
+  dt_max_s: 150
   guardar_cada_h: 1.0
 
 criterios:

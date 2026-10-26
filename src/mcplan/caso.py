@@ -82,8 +82,8 @@ def cargar_caso(ruta) -> Caso:
     cfg = yaml.safe_load(ruta.read_text(encoding="utf-8"))
     base = ruta.parent
 
-    materiales = {n: _material(n, d) for n, d in cfg["materiales"].items()}
-    capas = [Capa(materiales[c["material"]], c["espesor"], c["T_inicial"], c.get("nombre", ""))
+    materiales = {n: _material(n, d) for n, d in cfg["materiales"].items()}  # recorre el diccionario de materiales y crea un diccionario de objetos Material
+    capas = [Capa(materiales[c["material"]], c["espesor"], c["T_inicial"], c.get("nombre", ""))  # recorre la lista de capas y crea una lista de objetos Capa
              for c in cfg["capas"]]
 
     # Opcional: el hormigón se arma desde el IFC (una capa por vertida en el eje).
@@ -93,7 +93,7 @@ def cargar_caso(ruta) -> Caso:
         d = cfg["hormigon_desde_ifc"]
         mat = materiales[d["material"]]
         for v in columna_desde_ifc(base / d["archivo"], d.get("x", 0.0), d.get("y", 0.0)):
-            capas.append(Capa(mat, v["z1"] - v["z0"], v["T_colocacion"], v["VertidaID"] or v["nombre"]))
+            capas.append(Capa(mat, v["z1"] - v["z0"], v["T_colocacion"], v["nombre"]))
 
     tiempo = cfg["tiempo"]
     hora_inicio = tiempo.get("hora_inicio", 0.0)

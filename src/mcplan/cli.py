@@ -3,8 +3,9 @@
     mcplan simular1d config/caso_base_1d.yaml [--dz 0.1] [--dt 600] [--forzar]
     mcplan malla     config/caso_base_1d.yaml --dz 0.2 0.1 0.05 0.025
     mcplan verificar [--dz 0.2 0.1 0.05 0.025] [--dt 600] [--forzar]
-    mcplan ifc-crear [models/fundacion_base.ifc]
-    mcplan ifc-info  models/fundacion_base.ifc [--guardar antes.json] [--comparar antes.json]
+    mcplan ifc-propiedades geometry/foundation.ifc
+    mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
+    mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
 """
 
 import argparse
@@ -109,8 +110,21 @@ def cmd_verificar(args):
 def cmd_ifc_crear(args):
     from .ifc_io import crear_modelo_base
 
-    ruta = crear_modelo_base(args.ruta)
-    print(f"IFC creado: {ruta}")
+    ruta = crear_modelo_base(args.ruta, args.geometria)
+    print(f"IFC creado con IfcOpenShell: {ruta}")
+    return 0
+
+
+def cmd_ifc_propiedades(args):
+    from .ifc_io import PSET_VERTIDA, agregar_propiedades_curso
+
+    asignadas = agregar_propiedades_curso(args.entrada, args.salida)
+    for nombre in asignadas:
+        print(f"OK: {nombre}")
+    if not asignadas:
+        print("No se encontró ninguna vertida (Name = Vertida_01 ... Vertida_05).")
+        return 1
+    print(f"{PSET_VERTIDA} escrito en {args.salida or args.entrada}")
     return 0
 
 
@@ -153,9 +167,15 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--forzar", action="store_true")
     s.set_defaults(func=cmd_verificar)
 
-    s = sub.add_parser("ifc-crear", help="Genera el IFC base de la fundación")
-    s.add_argument("ruta", nargs="?", default="models/fundacion_base.ifc")
+    s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
+    s.add_argument("ruta", help="archivo .ifc de salida")
+    s.add_argument("--geometria", default="geometry/course_geometry.json")
     s.set_defaults(func=cmd_ifc_crear)
+
+    s = sub.add_parser("ifc-propiedades", help="Agrega/actualiza UANDES_HormigonMasivo en las vertidas")
+    s.add_argument("entrada", help="archivo .ifc (se modifica si no se indica --salida)")
+    s.add_argument("--salida")
+    s.set_defaults(func=cmd_ifc_propiedades)
 
     s = sub.add_parser("ifc-info", help="Lee un IFC: elementos, propiedades y geometría")
     s.add_argument("ruta")

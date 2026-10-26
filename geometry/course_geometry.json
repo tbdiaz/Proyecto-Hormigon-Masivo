@@ -1,0 +1,20 @@
+{
+  "descripcion": "Geometría docente oficial de la fundación (guía 'Modelar la fundación en Blender + Bonsai' del curso), inspirada en Ju y Lei (2019).",
+  "unidades": "m",
+  "simplificaciones": [
+    "Planta exterior octagonal regular de 18 m entre caras opuestas (apotema 9 m).",
+    "Espesor en el borde 1.10 m y espesor central 3.30 m; la transición es un tronco octagonal dividido en dos niveles iguales.",
+    "Plataforma central: octágono auxiliar de 7 m entre caras (apotema 3.5 m).",
+    "Pedestal cilíndrico de 7 m de diámetro y 1.0 m de altura (altura adoptada sólo para el ejercicio docente), aproximado con 48 lados.",
+    "Los octágonos se rotan 22.5° para que sus caras queden alineadas con los ejes X e Y.",
+    "Centro de la fundación en (x, y) = (0, 0) y base en z = 0. Sin georreferenciación."
+  ],
+  "radios_nota": "radio1/radio2 son radios al vértice (lo que pide Blender): R = apotema / cos(pi/n).",
+  "vertidas": [
+    {"nombre": "Vertida_01", "primitiva": "cilindro", "lados": 8,  "radio1": 9.74153, "radio2": 9.74153, "z0": 0.00, "z1": 0.55, "rotacion_z_deg": 22.5},
+    {"nombre": "Vertida_02", "primitiva": "cilindro", "lados": 8,  "radio1": 9.74153, "radio2": 9.74153, "z0": 0.55, "z1": 1.10, "rotacion_z_deg": 22.5},
+    {"nombre": "Vertida_03", "primitiva": "cono",     "lados": 8,  "radio1": 9.74153, "radio2": 6.76495, "z0": 1.10, "z1": 2.20, "rotacion_z_deg": 22.5},
+    {"nombre": "Vertida_04", "primitiva": "cono",     "lados": 8,  "radio1": 6.76495, "radio2": 3.78837, "z0": 2.20, "z1": 3.30, "rotacion_z_deg": 22.5},
+    {"nombre": "Vertida_05", "primitiva": "cilindro", "lados": 48, "radio1": 3.50000, "radio2": 3.50000, "z0": 3.30, "z1": 4.30, "rotacion_z_deg": 0.0}
+  ]
+}

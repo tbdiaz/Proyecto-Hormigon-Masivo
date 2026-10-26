@@ -4,12 +4,14 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import yaml
 
 from mcplan.caso import _borde, cargar_caso, temperatura_ambiente
 from mcplan.metricas import calcular_metricas
 from mcplan.solver1d import crear_malla, simular
 
-CONFIG = Path(__file__).resolve().parents[1] / "config"
+RAIZ = Path(__file__).resolve().parents[1]
+CONFIG = RAIZ / "config"
 
 
 def _correr(caso, horas=48, dz=0.1):
@@ -32,6 +34,23 @@ def test_caso_ifc_lee_las_vertidas_del_modelo():
     hormigon = [c for c in caso.capas if c.material.es_hormigon]
     assert len(hormigon) >= 1
     assert all(c.espesor > 0 for c in hormigon)
+
+
+def test_puente_ifc_reproduce_el_caso_base(tmp_path):
+    """El IFC oficial leído en el eje debe dar exactamente lo mismo que el caso base
+    escrito a mano (misma columna: 4.30 m a 18 °C). Si no, la lectura del IFC falla."""
+    pytest.importorskip("ifcopenshell")
+    from mcplan.ifc_io import crear_modelo_base
+
+    ruta_ifc = crear_modelo_base(tmp_path / "foundation.ifc", RAIZ / "geometry" / "course_geometry.json")
+    cfg = yaml.safe_load((CONFIG / "caso_ifc_1d.yaml").read_text(encoding="utf-8"))
+    cfg["hormigon_desde_ifc"]["archivo"] = str(ruta_ifc)
+    (tmp_path / "caso.yaml").write_text(yaml.safe_dump(cfg), encoding="utf-8")
+
+    desde_ifc = calcular_metricas(_correr(cargar_caso(tmp_path / "caso.yaml"), horas=72, dz=0.05))
+    a_mano = calcular_metricas(_correr(cargar_caso(CONFIG / "caso_base_1d.yaml"), horas=72, dz=0.05))
+    assert desde_ifc.Tmax == pytest.approx(a_mano.Tmax, abs=1e-6)
+    assert desde_ifc.dTmax == pytest.approx(a_mano.dTmax, abs=1e-6)
 
 
 def test_ambiente_sinusoidal_es_maximo_a_la_hora_indicada():

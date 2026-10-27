@@ -253,3 +253,47 @@ def test_solucion_exacta_sinusoidal_3d():
     )
 
     assert error_maximo < 0.3
+
+
+def test_interfaz_dos_materiales_conserva_energia_2d():
+    # Dominio con dos materiales diferentes
+    T_inicial = np.full((10, 10), 20.0)
+    T_inicial[:5, :] = 60.0
+
+    # Primer material: k = 2 W/(m K)
+    # Segundo material: k = 0.5 W/(m K)
+    k = np.full((10, 10), 0.5)
+    k[:5, :] = 2.0
+
+    rho = np.full((10, 10), 1800.0)
+    rho[:5, :] = 2400.0
+
+    cp = np.full((10, 10), 800.0)
+    cp[:5, :] = 900.0
+
+    T_final = simular_difusion(
+        T_inicial=T_inicial,
+        alpha=1e-6,
+        espaciamientos=(0.1, 0.1),
+        dt=100.0,
+        pasos=100,
+        conductividad=k,
+        rho=rho,
+        cp=cp,
+    )
+
+    # Energia termica proporcional a rho * cp * volumen.
+    # Como todas las celdas tienen igual volumen,
+    # el factor volumen se cancela al comparar.
+    energia_inicial = np.sum(rho * cp * T_inicial)
+    energia_final = np.sum(rho * cp * T_final)
+
+    assert np.isclose(
+        energia_inicial,
+        energia_final,
+        rtol=1e-10,
+    )
+
+    # Debe existir transferencia de calor en la interfaz.
+    assert np.mean(T_final[:5, :]) < 60.0
+    assert np.mean(T_final[5:, :]) > 20.0

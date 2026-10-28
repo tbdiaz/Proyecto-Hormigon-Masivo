@@ -43,8 +43,11 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 ## Uso rápido
 
 ```powershell
-pytest                                            # 36 tests automatizados
-mcplan verificar                                  # solver vs. solución analítica (orden de convergencia)
+pytest                                            # 70 tests automatizados (batería 1D/2D/3D)
+mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
+mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
+mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
+mcplan energia --dim 3 --dos-materiales           # conservación de energía (hormigón + suelo, caras adiabáticas)
 mcplan simular1d config/caso_base_1d.yaml         # columna del eje escrita a mano: métricas + gráficos en resultados/
 mcplan simular1d config/caso_ifc_1d.yaml          # la misma columna, leída desde el IFC
 mcplan malla config/caso_base_1d.yaml             # sensibilidad de Tmax y ΔT al tamaño de celda
@@ -59,6 +62,16 @@ mcplan simular1d config/caso_base_1d.yaml --dt 1200
 mcplan simular1d config/caso_base_1d.yaml --dt 3000            # se rechaza: dt > dt crítico
 mcplan simular1d config/caso_base_1d.yaml --dt 3000 --forzar   # se ve la divergencia
 ```
+
+Los casos 2D/3D aceptan cualquier parámetro (el Δt se calcula solo bajo el paso crítico real):
+
+```powershell
+mcplan sinusoidal --dim 3 --L 1 2 1.5 --alpha 2e-4 --A 30 --T0 15 --t 900 --n 8 16
+mcplan fuente --dim 2 --q0 2500 --rho 2300 --cp 1000 --T0 10 --t 259200
+mcplan sinusoidal --dim 2 --n 20 --dt 9 --forzar                # dt > dt crítico: diverge
+```
+
+Detalle del solver 2D/3D, la estabilidad y la batería E05 en [`docs/solver_nd.md`](docs/solver_nd.md).
 
 ## Modelo BIM de la fundación
 
@@ -140,15 +153,17 @@ geometry/            modelo IFC (Bonsai) y geometría oficial del curso (JSON)
 scripts/             modelado y capturas en Blender + Bonsai (sin interfaz)
 src/mcplan/
   solver1d.py        balance de energía por celda, Euler explícito, bordes Dirichlet/Neumann/Robin
+  solver_nd.py       el mismo balance en 2D/3D: vóxeles, dos materiales, fuente, Δt crítico real
   hidratacion.py     calor de hidratación: curva adiabática Ju y Lei (2019) + edad equivalente
   metricas.py        Tmax y ΔT = Tmax − Tmin(25 mm bajo la superficie)
   caso.py            lectura de casos YAML
   ifc_io.py          lectura/escritura del IFC, propiedades del curso, detección de cambios, columna IFC → solver
-  verificacion.py    solución analítica y estudio de convergencia
+  verificacion.py    solución analítica 1D y estudio de convergencia
+  verificacion_nd.py casos exactos 2D/3D: sinusoidal, fuente uniforme, energía adiabática
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
-docs/                modelo físico-numérico (modelo_1d.md) y capturas del BIM
+docs/                modelo 1D (modelo_1d.md), solver 2D/3D y batería E05 (solver_nd.md), capturas del BIM
 ```
 
 ## Arquitectura
@@ -167,12 +182,13 @@ sólo 1,30 m.
 | Componente | Estado |
 |---|---|
 | Solver 1D (conducción, multicapa, Dirichlet/Neumann/Robin, hidratación) | ✅ verificado (orden 2 en espacio) |
+| Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica) | ✅ verificado (orden 2 en 2D y 3D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería de la guía G05 en 1D) | ✅ 36 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D) | ✅ 70 tests |
 | Activación temporal de vertidas (`Inicio_h`) | ⏳ pendiente |
 | Clima real (Open-Meteo, snapshots) | ⏳ pendiente: hoy el ambiente es una sinusoide ilustrativa |
-| Solver 3D + voxelización | ⏳ pendiente |
+| Voxelización de la fundación + hidratación y clima en 3D | ⏳ pendiente |
 | Monte Carlo / HPC / PyVista | ⏳ pendiente |
 
 ## Supuestos vigentes

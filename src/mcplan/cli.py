@@ -3,6 +3,9 @@
     mcplan simular1d config/caso_base_1d.yaml [--dz 0.1] [--dt 600] [--forzar]
     mcplan malla     config/caso_base_1d.yaml --dz 0.2 0.1 0.05 0.025
     mcplan verificar [--dz 0.2 0.1 0.05 0.025] [--dt 600] [--forzar]
+    mcplan sinusoidal --dim 2|3 [--L 1 2] [--alpha 1e-4] [--A 50] [--T0 20] [--t 1200] [--n 15 30] [--dt] [--forzar]
+    mcplan fuente     --dim 2|3 [--q0 10000] [--rho 2400] [--cp 900] [--T0 20] [--t 28800]
+    mcplan energia    --dim 2|3 [--dos-materiales] [--t 259200]
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -107,6 +110,60 @@ def cmd_verificar(args):
     return 0
 
 
+def cmd_sinusoidal(args):
+    from math import exp, pi
+
+    from .verificacion_nd import convergencia_sinusoidal
+
+    L = args.L * args.dim if len(args.L) == 1 else args.L
+    if len(L) != args.dim:
+        raise ValueError(f"--L necesita 1 o {args.dim} valores")
+    ns = args.n or ([15, 30, 60] if args.dim == 2 else [8, 16, 32])
+    t = args.t or (1200.0 if args.dim == 2 else 600.0)  # tiempos de la guía
+    lam = sum((pi / Li) ** 2 for Li in L)
+    print(f"Caso sinusoidal {args.dim}D: L = {' x '.join(f'{Li:g}' for Li in L)} m, alpha = {args.alpha:g} m²/s, "
+          f"A = {args.A:g} °C, T0 = {args.T0:g} °C, t = {t:g} s")
+    print(f"Contorno Dirichlet a T0. Exacta: T0 + A·Πsin(πx_i/L_i)·exp(−αλt), λ = {lam:.4g} 1/m², "
+          f"exp(−αλt) = {exp(-args.alpha * lam * t):.4f}")
+    print(f"{'n/eje':>6} {'d [m]':>8} {'dt [s]':>10} {'dt crít [s]':>11} {'pasos':>7} {'error máx [°C]':>15} {'orden':>6}")
+    filas = convergencia_sinusoidal(L, ns, alpha=args.alpha, A=args.A, T0=args.T0, t_final=t,
+                                    dt=args.dt, forzar=args.forzar)
+    for f in filas:
+        error = "DIVERGE" if f.error_max == float("inf") else f"{f.error_max:.3e}"
+        orden = "" if f.orden is None else f"{f.orden:6.2f}"
+        print(f"{f.n:6d} {f.d[0]:8.4f} {f.dt:10.4g} {f.dt_critico:11.4g} {f.pasos:7d} {error:>15} {orden:>6}")
+    return 2 if any(f.error_max == float("inf") for f in filas) else 0
+
+
+def cmd_fuente(args):
+    from .verificacion_nd import caso_fuente_uniforme
+
+    r = caso_fuente_uniforme(args.dim, args.q0, args.rho, args.cp, args.T0, args.t, n=args.n)
+    print(f"Fuente uniforme {args.dim}D en dominio adiabático: q0 = {args.q0:g} W/m³, rho = {args.rho:g} kg/m³, "
+          f"cp = {args.cp:g} J/(kg·K), T0 = {args.T0:g} °C, t = {args.t:g} s ({args.t / 3600:.2f} h)")
+    print(f"Exacta: T0 + q0·t/(rho·cp) = {r.T_exacta:.6f} °C   (dT/dt = {args.q0 / (args.rho * args.cp) * 3600:.4f} °C/h)")
+    print(f"Numérica: T media = {r.T_media:.6f} °C   error máx = {r.error_max:.2e} °C   "
+          f"Tmax − Tmin = {r.dispersion:.2e} °C")
+    print(f"Energía: ganada = {r.energia_ganada:.6e} J   aportada q0·V·t = {r.energia_aportada:.6e} J   "
+          f"error relativo = {r.error_balance:.2e}")
+    print(f"dt = {r.dt:.4g} s   pasos = {r.pasos}")
+    return 0
+
+
+def cmd_energia(args):
+    from .verificacion_nd import caso_energia_adiabatica
+
+    r = caso_energia_adiabatica(args.dim, n=args.n, t_final=args.t, dos_materiales=args.dos_materiales)
+    materiales = "hormigón (x < 0,5 m) y suelo (x > 0,5 m)" if args.dos_materiales else "hormigón"
+    print(f"Dominio adiabático {args.dim}D sin fuente, 1 m de lado, {args.n} celdas por eje, {materiales}, "
+          f"t = {args.t:g} s ({args.t / 3600:.1f} h)")
+    print(f"Tmax: {r.Tmax_inicial:.2f} °C -> {r.Tmax_final:.2f} °C (el calor se redistribuye)")
+    print(f"Energía E = Σ ρ·cp·V·T: inicial = {r.E_inicial:.10e} J   final = {r.E_final:.10e} J   "
+          f"error relativo = {r.error_relativo:.2e}")
+    print(f"dt = {r.dt:.4g} s   pasos = {r.pasos}")
+    return 0
+
+
 def cmd_ifc_crear(args):
     from .ifc_io import crear_modelo_base
 
@@ -166,6 +223,35 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--dt", type=float, help="paso fijo [s] (por defecto, automático)")
     s.add_argument("--forzar", action="store_true")
     s.set_defaults(func=cmd_verificar)
+
+    s = sub.add_parser("sinusoidal", help="Caso exacto 2D/3D (E05) con orden de convergencia")
+    s.add_argument("--dim", type=int, choices=(2, 3), default=2)
+    s.add_argument("--L", type=float, nargs="+", default=[1.0], help="largo por eje [m] (uno para todos)")
+    s.add_argument("--alpha", type=float, default=1e-4, help="difusividad [m²/s]")
+    s.add_argument("--A", type=float, default=50.0, help="amplitud inicial [°C]")
+    s.add_argument("--T0", type=float, default=20.0, help="temperatura del contorno [°C]")
+    s.add_argument("--t", type=float, help="tiempo final [s] (por defecto 1200 en 2D y 600 en 3D)")
+    s.add_argument("--n", type=int, nargs="+", help="celdas por eje (por defecto 15 30 60 en 2D, 8 16 32 en 3D)")
+    s.add_argument("--dt", type=float, help="paso fijo [s] (por defecto, automático)")
+    s.add_argument("--forzar", action="store_true", help="permite un dt inestable (para ver la divergencia)")
+    s.set_defaults(func=cmd_sinusoidal)
+
+    s = sub.add_parser("fuente", help="Fuente uniforme en dominio adiabático (E05)")
+    s.add_argument("--dim", type=int, choices=(2, 3), default=3)
+    s.add_argument("--q0", type=float, default=10000.0, help="fuente volumétrica [W/m³]")
+    s.add_argument("--rho", type=float, default=2400.0, help="densidad [kg/m³]")
+    s.add_argument("--cp", type=float, default=900.0, help="calor específico [J/(kg·K)]")
+    s.add_argument("--T0", type=float, default=20.0, help="temperatura inicial [°C]")
+    s.add_argument("--t", type=float, default=8 * 3600.0, help="tiempo final [s]")
+    s.add_argument("--n", type=int, default=5, help="celdas por eje")
+    s.set_defaults(func=cmd_fuente)
+
+    s = sub.add_parser("energia", help="Conservación de energía en dominio adiabático (E05)")
+    s.add_argument("--dim", type=int, choices=(2, 3), default=3)
+    s.add_argument("--t", type=float, default=3 * 86400.0, help="tiempo final [s]")
+    s.add_argument("--n", type=int, default=10, help="celdas por eje")
+    s.add_argument("--dos-materiales", action="store_true", help="mitad hormigón, mitad suelo")
+    s.set_defaults(func=cmd_energia)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

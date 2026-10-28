@@ -142,7 +142,7 @@ Además: estacionario exacto con dos materiales (interfaz), principio del máxim
 divergencia con Δt inestable, bloque adiabático que reproduce la curva del ensayo, lectura del IFC
 (5 vertidas, volúmenes de la guía), detección de cambios, rayo vertical sobre los troncos y
 **puente IFC → solver**: la columna leída del IFC da el mismo resultado que el caso escrito a mano.
-Los tests 2D y 3D exactos vendrán con el solver 3D.
+Los tests 2D y 3D (G05 2 y 3) y el resto de la batería en 2D/3D están en [solver_nd.md](solver_nd.md).
 
 ## 9. Resultado de la columna del eje (sin control térmico)
 

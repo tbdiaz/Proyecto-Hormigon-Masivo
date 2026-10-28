@@ -1,15 +1,21 @@
-
 """Solver termico 2D/3D mediante volumenes finitos y Euler explicito.
 
 Incluye materiales homogeneos y heterogeneos, fuente volumetrica,
 condiciones Dirichlet, Neumann y Robin, y superficies adiabaticas.
 """
 
+import math
+
 import numpy as np
 
 
 def paso_critico(alpha: float, espaciamientos: tuple[float, ...]) -> float:
-    """Paso critico clasico para un material homogeneo."""
+    """Paso critico clasico de una celda interior (material homogeneo).
+
+    dt <= 1 / (2 alpha sum(1/d^2)). Junto a una cara Dirichlet o Robin el
+    limite es menor, porque la cara esta a media celda: el limite real de
+    una malla con bordes lo entrega paso_critico_malla.
+    """
     if alpha <= 0 or len(espaciamientos) not in (2, 3):
         raise ValueError("Alpha y dimension deben ser validos")
     if any(d <= 0 for d in espaciamientos):
@@ -20,35 +26,21 @@ def paso_critico(alpha: float, espaciamientos: tuple[float, ...]) -> float:
     )
 
 
-def simular_difusion(
-    T_inicial: np.ndarray,
-    alpha: float,
-    espaciamientos: tuple[float, ...],
-    dt: float,
-    pasos: int,
-    fuente: float = 0.0,
-    rho: float = 2400.0,
-    cp: float = 900.0,
-    bordes: dict | None = None,
-    conductividad=None,
-) -> np.ndarray:
-    """Resuelve conduccion termica en malla uniforme 2D/3D.
+def _discretizar(
+    T_inicial,
+    alpha,
+    espaciamientos,
+    fuente,
+    rho,
+    cp,
+    bordes,
+    conductividad,
+):
+    """Valida los datos y precalcula capacidades, conductancias y caras.
 
-    rho, cp y conductividad pueden ser escalares o matrices
-    con la misma forma que T_inicial.
-
-    Si conductividad no se especifica:
-        k = alpha * rho * cp
-
-    Convencion de bordes:
-        ("dirichlet", temperatura_superficie)
-        ("neumann", flujo_entrante)
-        ("robin", (h, temperatura_ambiente))
-
-    El flujo Neumann positivo entra al material.
-    Las caras no especificadas son adiabaticas.
+    suma_coeficientes guarda, por celda, sum(G)/C [1/s]: el coeficiente
+    que multiplica a T_i en el balance. Su maximo fija el paso critico.
     """
-
     T = np.array(T_inicial, dtype=float, copy=True)
 
     if T.ndim not in (2, 3):
@@ -64,10 +56,6 @@ def simular_difusion(
         raise ValueError("Alpha debe ser positivo y finito")
     if any(d <= 0 or not np.isfinite(d) for d in espaciamientos):
         raise ValueError("Espaciamientos invalidos")
-    if dt <= 0 or not np.isfinite(dt):
-        raise ValueError("dt debe ser positivo y finito")
-    if not isinstance(pasos, (int, np.integer)) or pasos < 0:
-        raise ValueError("pasos debe ser un entero no negativo")
 
     def propiedad_malla(valor, nombre):
         """Convierte una propiedad escalar o matricial a la malla."""
@@ -208,17 +196,89 @@ def simular_difusion(
                 suma_coeficientes[indice] += coef
                 caras.append((indice, tipo, coef, float(T_amb)))
 
-    # Limite local de estabilidad de Euler explicito.
+    return T, capacidad, fuente_m, conexiones, caras, suma_coeficientes
+
+
+def _dt_critico(suma_coeficientes: np.ndarray) -> float:
+    # Euler explicito: el coeficiente de T_i^n es 1 - dt * sum(G)/C >= 0.
     max_coef = float(np.max(suma_coeficientes))
+    return 1.0 / max_coef if max_coef > 0 else math.inf
 
-    if max_coef > 0:
-        dt_critico = 1.0 / max_coef
 
-        if dt > dt_critico * (1.0 + 1e-12):
-            raise ValueError(
-                f"dt={dt} supera el paso critico "
-                f"de {dt_critico:.6g} s"
-            )
+def paso_critico_malla(
+    T_inicial: np.ndarray,
+    alpha: float,
+    espaciamientos: tuple[float, ...],
+    rho: float = 2400.0,
+    cp: float = 900.0,
+    bordes: dict | None = None,
+    conductividad=None,
+) -> float:
+    """Paso critico real de la malla: dt <= min_i C_i / sum(G_i).
+
+    A diferencia de paso_critico, considera materiales distintos y las
+    caras Dirichlet o Robin. Recibe los mismos datos que simular_difusion.
+    Es una condicion suficiente (positividad), no exacta.
+    """
+    *_, suma_coeficientes = _discretizar(
+        T_inicial, alpha, espaciamientos, 0.0,
+        rho, cp, bordes, conductividad,
+    )
+    return _dt_critico(suma_coeficientes)
+
+
+def simular_difusion(
+    T_inicial: np.ndarray,
+    alpha: float,
+    espaciamientos: tuple[float, ...],
+    dt: float,
+    pasos: int,
+    fuente: float = 0.0,
+    rho: float = 2400.0,
+    cp: float = 900.0,
+    bordes: dict | None = None,
+    conductividad=None,
+    forzar: bool = False,
+) -> np.ndarray:
+    """Resuelve conduccion termica en malla uniforme 2D/3D.
+
+    rho, cp y conductividad pueden ser escalares o matrices
+    con la misma forma que T_inicial.
+
+    Si conductividad no se especifica:
+        k = alpha * rho * cp
+
+    Convencion de bordes:
+        ("dirichlet", temperatura_superficie)
+        ("neumann", flujo_entrante)
+        ("robin", (h, temperatura_ambiente))
+
+    El flujo Neumann positivo entra al material.
+    Las caras no especificadas son adiabaticas.
+
+    Con forzar=True se acepta un dt inestable (para mostrar la
+    divergencia); la integracion se detiene si |T| supera 1e4.
+    """
+    if dt <= 0 or not np.isfinite(dt):
+        raise ValueError("dt debe ser positivo y finito")
+    if not isinstance(pasos, (int, np.integer)) or pasos < 0:
+        raise ValueError("pasos debe ser un entero no negativo")
+
+    T, capacidad, fuente_m, conexiones, caras, suma_coeficientes = (
+        _discretizar(
+            T_inicial, alpha, espaciamientos, fuente,
+            rho, cp, bordes, conductividad,
+        )
+    )
+
+    # Limite local de estabilidad de Euler explicito.
+    dt_critico = _dt_critico(suma_coeficientes)
+
+    if dt > dt_critico * (1.0 + 1e-12) and not forzar:
+        raise ValueError(
+            f"dt={dt} supera el paso critico "
+            f"de {dt_critico:.6g} s"
+        )
 
     # Integracion temporal.
     for _ in range(pasos):
@@ -249,4 +309,44 @@ def simular_difusion(
 
         T = T + dt * variacion
 
+        if forzar and not np.max(np.abs(T)) < 1e4:
+            break  # divergio
+
     return T
+
+
+def simular_hasta(
+    T_inicial: np.ndarray,
+    alpha: float,
+    espaciamientos: tuple[float, ...],
+    t_final: float,
+    fuente: float = 0.0,
+    rho: float = 2400.0,
+    cp: float = 900.0,
+    bordes: dict | None = None,
+    conductividad=None,
+    factor_seguridad: float = 0.9,
+) -> tuple[np.ndarray, float]:
+    """Simula hasta t_final con dt automatico. Devuelve (T_final, dt).
+
+    Usa el menor numero de pasos tal que dt = t_final / pasos cumpla
+    dt <= factor_seguridad * dt_critico. Asi el tiempo final es exacto y
+    se pueden cambiar alpha, la malla o los bordes sin recalcular dt.
+    """
+    if t_final <= 0 or not np.isfinite(t_final):
+        raise ValueError("t_final debe ser positivo y finito")
+    if not 0 < factor_seguridad <= 1:
+        raise ValueError("factor_seguridad debe estar en (0, 1]")
+
+    dt_critico = paso_critico_malla(
+        T_inicial, alpha, espaciamientos,
+        rho, cp, bordes, conductividad,
+    )
+    pasos = max(1, math.ceil(t_final / (factor_seguridad * dt_critico)))
+    dt = t_final / pasos
+
+    T = simular_difusion(
+        T_inicial, alpha, espaciamientos, dt, pasos,
+        fuente, rho, cp, bordes, conductividad,
+    )
+    return T, dt

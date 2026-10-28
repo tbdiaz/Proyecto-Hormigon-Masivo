@@ -1,18 +1,17 @@
 
 import numpy as np
 
-from mcplan.solver_nd import simular_difusion
+from mcplan.solver_nd import simular_hasta
 
 
 def test_temperatura_uniforme_2d():
     T_inicial = np.full((10, 10), 20.0)
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1),
-        dt=100.0,
-        pasos=50,
+        t_final=5000.0,
     )
 
     assert np.allclose(T_final, 20.0)
@@ -21,12 +20,11 @@ def test_temperatura_uniforme_2d():
 def test_temperatura_uniforme_3d():
     T_inicial = np.full((6, 6, 6), 20.0)
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1, 0.1),
-        dt=100.0,
-        pasos=50,
+        t_final=5000.0,
     )
 
     assert np.allclose(T_final, 20.0)
@@ -36,12 +34,11 @@ def test_conservacion_energia_2d():
     T_inicial = np.full((10, 10), 20.0)
     T_inicial[4:6, 4:6] = 60.0
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1),
-        dt=100.0,
-        pasos=100,
+        t_final=10000.0,
     )
 
     assert np.isclose(
@@ -58,21 +55,19 @@ def test_fuente_uniforme_adiabatica_3d():
     rho = 2400.0
     cp = 900.0
     fuente = 1000.0  # W/m³
-    dt = 100.0
-    pasos = 50
+    t_final = 5000.0
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1, 0.1),
-        dt=dt,
-        pasos=pasos,
+        t_final=t_final,
         fuente=fuente,
         rho=rho,
         cp=cp,
     )
 
-    T_esperada = 20.0 + fuente * (dt * pasos) / (rho * cp)
+    T_esperada = 20.0 + fuente * t_final / (rho * cp)
 
     assert np.allclose(T_final, T_esperada)
 
@@ -80,12 +75,11 @@ def test_fuente_uniforme_adiabatica_3d():
 def test_dirichlet_2d():
     T_inicial = np.full((10, 10), 20.0)
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1),
-        dt=100.0,
-        pasos=100,
+        t_final=10000.0,
         bordes={"x_min": ("dirichlet", 60.0)},
     )
 
@@ -97,12 +91,11 @@ def test_dirichlet_2d():
 def test_neumann_2d():
     T_inicial = np.full((10, 10), 20.0)
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1),
-        dt=100.0,
-        pasos=100,
+        t_final=10000.0,
         bordes={"x_min": ("neumann", 100.0)},
     )
 
@@ -111,7 +104,7 @@ def test_neumann_2d():
     energia_final = np.sum(T_final)
 
     aumento_esperado = (
-        100.0 * 100.0 * 100 / (2400.0 * 900.0 * 0.1)
+        100.0 * 10000.0 / (2400.0 * 900.0 * 0.1)
         * T_inicial.shape[1]
     )
 
@@ -124,12 +117,11 @@ def test_neumann_2d():
 def test_robin_3d():
     T_inicial = np.full((6, 6, 6), 60.0)
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1, 0.1),
-        dt=100.0,
-        pasos=100,
+        t_final=10000.0,
         bordes={"z_max": ("robin", (10.0, 20.0))},
     )
 
@@ -147,8 +139,7 @@ def test_solucion_exacta_sinusoidal_2d():
     alpha = 1e-6
     T0 = 20.0
     A = 30.0
-    dt = 100.0
-    pasos = 1000
+    t_final = 1e5  # s (dt automatico)
 
     # Coordenadas de los centros de las celdas
     x = (np.arange(nx) + 0.5) * dx
@@ -160,12 +151,11 @@ def test_solucion_exacta_sinusoidal_2d():
     T_inicial = T0 + A * forma
 
     # Solucion numerica
-    T_numerica = simular_difusion(
+    T_numerica, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=alpha,
         espaciamientos=(dx, dy),
-        dt=dt,
-        pasos=pasos,
+        t_final=t_final,
         bordes={
             "x_min": ("dirichlet", T0),
             "x_max": ("dirichlet", T0),
@@ -175,7 +165,7 @@ def test_solucion_exacta_sinusoidal_2d():
     )
 
     # Solucion analitica del enunciado
-    tiempo = dt * pasos
+    tiempo = t_final
     lambd = (np.pi / Lx)**2 + (np.pi / Ly)**2
 
     T_exacta = T0 + A * forma * np.exp(-alpha * lambd * tiempo)
@@ -198,8 +188,7 @@ def test_solucion_exacta_sinusoidal_3d():
     alpha = 1e-6
     T0 = 20.0
     A = 30.0
-    dt = 100.0
-    pasos = 1000
+    t_final = 1e5  # s (dt automatico)
 
     # Coordenadas de los centros de las celdas
     x = (np.arange(nx) + 0.5) * dx
@@ -218,12 +207,11 @@ def test_solucion_exacta_sinusoidal_3d():
     T_inicial = T0 + A * forma
 
     # Solucion numerica
-    T_numerica = simular_difusion(
+    T_numerica, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=alpha,
         espaciamientos=(dx, dy, dz),
-        dt=dt,
-        pasos=pasos,
+        t_final=t_final,
         bordes={
             "x_min": ("dirichlet", T0),
             "x_max": ("dirichlet", T0),
@@ -235,7 +223,7 @@ def test_solucion_exacta_sinusoidal_3d():
     )
 
     # Solucion analitica oficial del E05
-    tiempo = dt * pasos
+    tiempo = t_final
 
     lambd = (
         (np.pi / Lx)**2
@@ -271,12 +259,11 @@ def test_interfaz_dos_materiales_conserva_energia_2d():
     cp = np.full((10, 10), 800.0)
     cp[:5, :] = 900.0
 
-    T_final = simular_difusion(
+    T_final, _ = simular_hasta(
         T_inicial=T_inicial,
         alpha=1e-6,
         espaciamientos=(0.1, 0.1),
-        dt=100.0,
-        pasos=100,
+        t_final=10000.0,
         conductividad=k,
         rho=rho,
         cp=cp,

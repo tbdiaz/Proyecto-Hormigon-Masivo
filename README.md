@@ -43,11 +43,14 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 ## Uso rápido
 
 ```powershell
-pytest                                            # 70 tests automatizados (batería 1D/2D/3D)
+pytest                                            # 88 tests automatizados (batería 1D/2D/3D)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
 mcplan energia --dim 3 --dos-materiales           # conservación de energía (hormigón + suelo, caras adiabáticas)
+mcplan rectangulo                                 # ejercicio de la pizarra: 4×2 m a 20 °C, borde a 10 °C -> GIF y T(t)
+mcplan rectangulo --hidratacion                   # el mismo rectángulo con calor de hidratación (Tmax, ΔT)
+mcplan rectangulo --hidratacion pulso             # con el pulso de la clase Q = Qmax/2·(1 − cos 2πt/T), solución exacta
 mcplan simular1d config/caso_base_1d.yaml         # columna del eje escrita a mano: métricas + gráficos en resultados/
 mcplan simular1d config/caso_ifc_1d.yaml          # la misma columna, leída desde el IFC
 mcplan malla config/caso_base_1d.yaml             # sensibilidad de Tmax y ΔT al tamaño de celda
@@ -72,6 +75,20 @@ mcplan sinusoidal --dim 2 --n 20 --dt 9 --forzar                # dt > dt críti
 ```
 
 Detalle del solver 2D/3D, la estabilidad y la batería E05 en [`docs/solver_nd.md`](docs/solver_nd.md).
+
+**Ejercicio de la pizarra** (`mcplan rectangulo`): rectángulo de 4 × 2 m de hormigón a 20 °C con todo el borde a
+10 °C.
+
+- **Sin hidratación:** el Δt crítico es 1746 s (junto al borde), se estabiliza (±0,1 °C) en 20 días y el error
+  contra la solución exacta es menor que 0,04 °C.
+- **Con hidratación** (`--hidratacion`): el centro llega a 71,9 °C a las 46 h y se estabiliza en 28,7 días. El
+  2D con hidratación da lo mismo que el solver 1D.
+- **Con el pulso de la clase** (`--hidratacion pulso`, Qmax = 1800 W/m³, T = 42 h): el centro llega a 76,2 °C a las
+  38 h. Como Q sólo depende de t, hay solución exacta: el error es menor que 0,2 °C y converge con orden 2.
+
+Detalle en la [sección 7 de `docs/solver_nd.md`](docs/solver_nd.md).
+
+![Evolución del rectángulo con hidratación](docs/img/rectangulo_hidratacion_evolucion.gif)
 
 ## Modelo BIM de la fundación
 
@@ -153,13 +170,14 @@ geometry/            modelo IFC (Bonsai) y geometría oficial del curso (JSON)
 scripts/             modelado y capturas en Blender + Bonsai (sin interfaz)
 src/mcplan/
   solver1d.py        balance de energía por celda, Euler explícito, bordes Dirichlet/Neumann/Robin
-  solver_nd.py       el mismo balance en 2D/3D: vóxeles, dos materiales, fuente, Δt crítico real
+  solver_nd.py       el mismo balance en 2D/3D: vóxeles, dos materiales, fuente, hidratación, Δt crítico real
   hidratacion.py     calor de hidratación: curva adiabática Ju y Lei (2019) + edad equivalente
   metricas.py        Tmax y ΔT = Tmax − Tmin(25 mm bajo la superficie)
   caso.py            lectura de casos YAML
   ifc_io.py          lectura/escritura del IFC, propiedades del curso, detección de cambios, columna IFC → solver
   verificacion.py    solución analítica 1D y estudio de convergencia
   verificacion_nd.py casos exactos 2D/3D: sinusoidal, fuente uniforme, energía adiabática
+  rectangulo.py      ejercicio de la pizarra: rectángulo con borde Dirichlet, solución exacta, T(t) en puntos
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
@@ -182,13 +200,13 @@ sólo 1,30 m.
 | Componente | Estado |
 |---|---|
 | Solver 1D (conducción, multicapa, Dirichlet/Neumann/Robin, hidratación) | ✅ verificado (orden 2 en espacio) |
-| Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica) | ✅ verificado (orden 2 en 2D y 3D) |
+| Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D) | ✅ 70 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicio del rectángulo) | ✅ 88 tests |
 | Activación temporal de vertidas (`Inicio_h`) | ⏳ pendiente |
 | Clima real (Open-Meteo, snapshots) | ⏳ pendiente: hoy el ambiente es una sinusoide ilustrativa |
-| Voxelización de la fundación + hidratación y clima en 3D | ⏳ pendiente |
+| Voxelización de la fundación + clima en 3D | ⏳ pendiente |
 | Monte Carlo / HPC / PyVista | ⏳ pendiente |
 
 ## Supuestos vigentes

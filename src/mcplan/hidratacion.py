@@ -1,5 +1,8 @@
 """Calor de hidratación del hormigón como fuente volumétrica de calor.
 
+Dos modelos con la misma interfaz (potencia y factor_arrhenius): la curva de
+Ju y Lei (2019) y el pulso coseno de la clase (CalorPulsoCoseno, al final).
+
 Modelo de Ju y Lei (2019), ecuaciones (2)-(4):
 
     theta(te) = 0.02 * te^2.342                     si te <= 21 h
@@ -61,3 +64,45 @@ class HidratacionJuLei2019:
         rho*cp [J/(m3·K)] * dtheta/dte [K/h] * dte/dt [-] / 3600 [s/h]
         """
         return rho * cp * self.dtheta_dte(te_h) * self.factor_arrhenius(T_C) / 3600.0
+
+
+@dataclass
+class CalorPulsoCoseno:
+    """Calor de hidratación simplificado de la clase: un pulso coseno en el tiempo.
+
+        Q(t) = Q_max/2 * (1 - cos(2 pi t / T))   si t < T
+        Q(t) = 0                                 si t >= T
+
+    Parte en 0, llega a Q_max en t = T/2 y vuelve a 0 en t = T. Sólo depende
+    del tiempo (no de la temperatura): el problema sigue siendo lineal y tiene
+    solución exacta. Energía total liberada: Q_max T / 2 [J/m3].
+
+    Valores por defecto tomados de Ju y Lei (2019): el ritmo máximo de su curva
+    es 2,79 °C/h a las 21 h, es decir Q_max = 2400*970*2.79/3600 ≈ 1800 W/m3 y
+    T = 42 h; la elevación adiabática total queda Q_max T/(2 rho cp) ≈ 58 °C.
+
+    Tiene la misma interfaz que HidratacionJuLei2019 (potencia y
+    factor_arrhenius), con dte/dt = 1: la "edad" es el tiempo real en horas.
+    """
+
+    Q_max: float = 1800.0  # W/m3
+    T_h: float = 42.0  # duración del pulso [h]
+
+    def Q(self, t_h):
+        """Calor generado [W/m3] en el instante t [h]."""
+        t = np.asarray(t_h, dtype=float)
+        pulso = 0.5 * self.Q_max * (1.0 - np.cos(2.0 * np.pi * t / self.T_h))
+        return np.where((t >= 0.0) & (t < self.T_h), pulso, 0.0)
+
+    def energia(self, t_h):
+        """Calor acumulado desde t = 0 [J/m3]: integral de Q."""
+        t = np.clip(np.asarray(t_h, dtype=float), 0.0, self.T_h)
+        return 0.5 * self.Q_max * 3600.0 * (t - self.T_h / (2.0 * np.pi) * np.sin(2.0 * np.pi * t / self.T_h))
+
+    def factor_arrhenius(self, T_C):
+        """dte/dt = 1: el pulso no depende de la temperatura."""
+        return np.ones_like(np.asarray(T_C, dtype=float))
+
+    def potencia(self, te_h, T_C, rho, cp):
+        """Q [W/m3]; rho y cp no se usan (Q ya viene en W/m3), están por la interfaz común."""
+        return self.Q(te_h) * np.ones_like(np.asarray(T_C, dtype=float))

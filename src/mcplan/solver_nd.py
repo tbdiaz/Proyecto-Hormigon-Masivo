@@ -1,10 +1,12 @@
 """Solver termico 2D/3D mediante volumenes finitos y Euler explicito.
 
 Incluye materiales homogeneos y heterogeneos, fuente volumetrica,
-condiciones Dirichlet, Neumann y Robin, y superficies adiabaticas.
+calor de hidratacion, condiciones Dirichlet, Neumann y Robin, y
+superficies adiabaticas.
 """
 
 import math
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -239,6 +241,9 @@ def simular_difusion(
     bordes: dict | None = None,
     conductividad=None,
     forzar: bool = False,
+    hidratacion=None,
+    edad: np.ndarray | None = None,
+    es_hormigon=None,
 ) -> np.ndarray:
     """Resuelve conduccion termica en malla uniforme 2D/3D.
 
@@ -258,6 +263,12 @@ def simular_difusion(
 
     Con forzar=True se acepta un dt inestable (para mostrar la
     divergencia); la integracion se detiene si |T| supera 1e4.
+
+    Calor de hidratacion (opcional): hidratacion es el modelo
+    (HidratacionJuLei2019 o CalorPulsoCoseno: cualquier objeto con
+    potencia y factor_arrhenius), edad la edad equivalente te [h] de cada celda
+    (arreglo float que se actualiza en el lugar, para continuar despues) y
+    es_hormigon la mascara de celdas que hidratan (todas si es None).
     """
     if dt <= 0 or not np.isfinite(dt):
         raise ValueError("dt debe ser positivo y finito")
@@ -270,6 +281,17 @@ def simular_difusion(
             rho, cp, bordes, conductividad,
         )
     )
+
+    if hidratacion is not None:
+        if edad is None:
+            edad = np.zeros_like(T)
+        if not isinstance(edad, np.ndarray) or edad.shape != T.shape or edad.dtype != float:
+            raise ValueError(f"edad debe ser un arreglo float de forma {T.shape}")
+        hormigon = np.ones_like(T) if es_hormigon is None else (
+            np.broadcast_to(np.asarray(es_hormigon, dtype=bool), T.shape).astype(float)
+        )
+        rho_h = np.broadcast_to(np.asarray(rho, dtype=float), T.shape)
+        cp_h = np.broadcast_to(np.asarray(cp, dtype=float), T.shape)
 
     # Limite local de estabilidad de Euler explicito.
     dt_critico = _dt_critico(suma_coeficientes)
@@ -307,6 +329,13 @@ def simular_difusion(
                     coef * (dato - T[indice])
                 )
 
+        # Calor de hidratacion Q [W/m3] con T y te del paso anterior
+        # (explicito, igual que en 1D).
+        if hidratacion is not None:
+            Q = hidratacion.potencia(edad, T, rho_h, cp_h) * hormigon
+            variacion += Q / capacidad
+            edad += dt / 3600.0 * hidratacion.factor_arrhenius(T) * hormigon
+
         T = T + dt * variacion
 
         if forzar and not np.max(np.abs(T)) < 1e4:
@@ -326,27 +355,115 @@ def simular_hasta(
     bordes: dict | None = None,
     conductividad=None,
     factor_seguridad: float = 0.9,
+    dt_max: float | None = None,
+    hidratacion=None,
+    edad: np.ndarray | None = None,
+    es_hormigon=None,
 ) -> tuple[np.ndarray, float]:
     """Simula hasta t_final con dt automatico. Devuelve (T_final, dt).
 
     Usa el menor numero de pasos tal que dt = t_final / pasos cumpla
-    dt <= factor_seguridad * dt_critico. Asi el tiempo final es exacto y
-    se pueden cambiar alpha, la malla o los bordes sin recalcular dt.
+    dt <= factor_seguridad * dt_critico (y dt <= dt_max, si se indica:
+    tope por precision para seguir el calor de hidratacion). Asi el tiempo
+    final es exacto y se pueden cambiar alpha, la malla o los bordes sin
+    recalcular dt.
     """
     if t_final <= 0 or not np.isfinite(t_final):
         raise ValueError("t_final debe ser positivo y finito")
-    if not 0 < factor_seguridad <= 1:
-        raise ValueError("factor_seguridad debe estar en (0, 1]")
 
-    dt_critico = paso_critico_malla(
-        T_inicial, alpha, espaciamientos,
-        rho, cp, bordes, conductividad,
+    pasos = _pasos_para(
+        t_final, T_inicial, alpha, espaciamientos, rho, cp, bordes,
+        conductividad, factor_seguridad, dt_max,
     )
-    pasos = max(1, math.ceil(t_final / (factor_seguridad * dt_critico)))
     dt = t_final / pasos
 
     T = simular_difusion(
         T_inicial, alpha, espaciamientos, dt, pasos,
         fuente, rho, cp, bordes, conductividad,
+        hidratacion=hidratacion, edad=edad, es_hormigon=es_hormigon,
     )
     return T, dt
+
+
+def _pasos_para(intervalo, T_inicial, alpha, espaciamientos, rho, cp, bordes,
+                conductividad, factor_seguridad, dt_max):
+    """Menor numero de pasos que cubre el intervalo con un dt estable (y <= dt_max)."""
+    if not 0 < factor_seguridad <= 1:
+        raise ValueError("factor_seguridad debe estar en (0, 1]")
+    if dt_max is not None and dt_max <= 0:
+        raise ValueError("dt_max debe ser positivo")
+
+    dt_objetivo = factor_seguridad * paso_critico_malla(
+        T_inicial, alpha, espaciamientos,
+        rho, cp, bordes, conductividad,
+    )
+    if dt_max is not None:
+        dt_objetivo = min(dt_objetivo, dt_max)
+    return max(1, math.ceil(intervalo / dt_objetivo))
+
+
+@dataclass
+class Serie:
+    t: np.ndarray  # instantes guardados [s]
+    T: np.ndarray  # (n_guardados, *forma_malla) [°C]
+    te: np.ndarray | None  # edad equivalente [h], misma forma que T (None sin hidratacion)
+    dt: float  # paso usado [s]
+
+
+def simular_serie(
+    T_inicial: np.ndarray,
+    alpha: float,
+    espaciamientos: tuple[float, ...],
+    t_final: float,
+    guardar_cada: float,
+    fuente: float = 0.0,
+    rho: float = 2400.0,
+    cp: float = 900.0,
+    bordes: dict | None = None,
+    conductividad=None,
+    factor_seguridad: float = 0.9,
+    dt_max: float | None = None,
+    hidratacion=None,
+    te_inicial=0.0,
+    es_hormigon=None,
+) -> Serie:
+    """Como simular_hasta, pero guarda el campo cada guardar_cada segundos.
+
+    dt se ajusta para que guardar_cada sea un multiplo exacto de dt; se
+    guarda hasta el primer multiplo de guardar_cada >= t_final.
+    """
+    if t_final <= 0 or not np.isfinite(t_final):
+        raise ValueError("t_final debe ser positivo y finito")
+    if guardar_cada <= 0 or not np.isfinite(guardar_cada):
+        raise ValueError("guardar_cada debe ser positivo y finito")
+
+    pasos = _pasos_para(
+        guardar_cada, T_inicial, alpha, espaciamientos, rho, cp, bordes,
+        conductividad, factor_seguridad, dt_max,
+    )
+    dt = guardar_cada / pasos
+    n_guardados = max(1, math.ceil(t_final / guardar_cada - 1e-9))
+
+    # El estado del esquema es T (y te con hidratacion): cada tramo parte del anterior.
+    campos = [np.array(T_inicial, dtype=float, copy=True)]
+    edad = None
+    edades = None
+    if hidratacion is not None:
+        edad = np.array(np.broadcast_to(np.asarray(te_inicial, dtype=float), campos[0].shape))
+        edades = [edad.copy()]
+
+    for _ in range(n_guardados):
+        campos.append(simular_difusion(
+            campos[-1], alpha, espaciamientos, dt, pasos,
+            fuente, rho, cp, bordes, conductividad,
+            hidratacion=hidratacion, edad=edad, es_hormigon=es_hormigon,
+        ))
+        if edades is not None:
+            edades.append(edad.copy())
+
+    return Serie(
+        t=np.arange(n_guardados + 1) * guardar_cada,
+        T=np.stack(campos),
+        te=None if edades is None else np.stack(edades),
+        dt=dt,
+    )

@@ -6,6 +6,8 @@
     mcplan sinusoidal --dim 2|3 [--L 1 2] [--alpha 1e-4] [--A 50] [--T0 20] [--t 1200] [--n 15 30] [--dt] [--forzar]
     mcplan fuente     --dim 2|3 [--q0 10000] [--rho 2400] [--cp 900] [--T0 20] [--t 28800]
     mcplan energia    --dim 2|3 [--dos-materiales] [--t 259200]
+    mcplan rectangulo [--L 4 2] [--dx 0.1] [--alpha 1e-4] [--Ti 20] [--Tb 10] [--punto 0 0 --punto 1 0.5]
+                      [--hidratacion [ju-lei|pulso]] [--Qmax 1800] [--T-calor 42]
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -164,6 +166,136 @@ def cmd_energia(args):
     return 0
 
 
+def cmd_rectangulo(args):
+    from math import pi
+    from pathlib import Path
+
+    import numpy as np
+
+    from .hidratacion import CalorPulsoCoseno, HidratacionJuLei2019
+    from .rectangulo import en_el_borde, simular_rectangulo, unidad_tiempo
+
+    Lx, Ly = args.L
+    k = args.alpha * args.rho * args.cp if args.alpha else args.k
+    puntos = args.punto or [(0.0, 0.0), (1.0, 0.5)]
+    modelo = {None: None, "ju-lei": HidratacionJuLei2019(),
+              "pulso": CalorPulsoCoseno(args.Qmax, args.T_calor)}[args.hidratacion]
+    t0 = time.perf_counter()
+    res = simular_rectangulo(Lx, Ly, args.dx, k, args.rho, args.cp, args.Ti, args.Tb, puntos, args.origen,
+                             args.t, args.tolerancia, args.cuadros, hidratacion=modelo if modelo else False,
+                             dt_max=args.dt_max)
+    computo = time.perf_counter() - t0
+    f, unidad = unidad_tiempo(res.t[-1])
+
+    print(f"Rectángulo {Lx:g} x {Ly:g} m, Ti = {args.Ti:g} °C, borde Dirichlet a {args.Tb:g} °C, "
+          f"origen en {'el centro' if args.origen == 'centro' else 'la esquina'}")
+    print(f"Material: k = {k:.4g} W/(m·K), rho = {args.rho:g} kg/m³, cp = {args.cp:g} J/(kg·K) "
+          f"-> alpha = {res.alpha:.4g} m²/s")
+    if isinstance(modelo, CalorPulsoCoseno):
+        E = modelo.energia(modelo.T_h)
+        print(f"Calor de hidratación (pulso de la clase): Q(t) = Qmax/2·(1 − cos(2πt/T)) si t < T, 0 después; "
+              f"Qmax = {modelo.Q_max:g} W/m³, T = {modelo.T_h:g} h")
+        print(f"  máximo Qmax en t = T/2 = {modelo.T_h / 2:g} h; energía total Qmax·T/2 = {E / 1e6:.1f} MJ/m³ "
+              f"-> elevación adiabática Qmax·T/(2·ρ·cp) = {E / (args.rho * args.cp):.1f} °C")
+    elif res.hidratacion:
+        print("Calor de hidratación: Ju y Lei (2019), θ(te) con edad equivalente (Eh/R = 2400 K, Tref = 20 °C), "
+              "te = 0 en t = 0 en todas las celdas")
+    print(f"Malla: dx = dy = {args.dx:g} m, {res.T.shape[1]} x {res.T.shape[2]} celdas")
+    print("\nPaso crítico (Euler explícito, coeficiente de T_i ≥ 0):")
+    print(f"  celda interior   dx²/(4α) = {res.dt_critico_interior:10.1f} s")
+    print(f"  junto al borde   dx²/(6α) = {res.dt_critico:10.1f} s   <- manda (la cara Dirichlet está a media celda)")
+    if res.dt_max is not None:
+        print(f"  tope de precisión dt_max  = {res.dt_max:10.1f} s   <- con hidratación manda la precisión, "
+              "no la estabilidad (la fuente es explícita)")
+    print(f"  dt usado                  = {res.dt:10.1f} s   ({res.dt / res.dt_critico:.0%} del crítico), "
+          f"{round(res.t[-1] / res.dt)} pasos")
+    print(f"\nEstabilización (|T − {args.Tb:g}| < {res.tolerancia:g} °C en todo el rectángulo):")
+    print(f"  modo más lento: λ1 = (π/Lx)² + (π/Ly)² = {(pi / Lx) ** 2 + (pi / Ly) ** 2:.4f} 1/m², "
+          f"τ = 1/(α·λ1) = {res.tau / f:.2f} {unidad}")
+    print(f"  estimado ln((16/π²)·ΔT/tol)·τ = {res.t_estabilizacion_estimado / f:.2f} {unidad}"
+          + ("   (sin hidratación)" if res.hidratacion else ""))
+    if res.t_estabilizacion is None:
+        print(f"  simulado: no alcanza la tolerancia en t = {res.t[-1] / f:.2f} {unidad} (aumente --t)")
+    else:
+        print(f"  simulado: {res.t_estabilizacion / f:.2f} {unidad}   (se simuló hasta {res.t[-1] / f:.2f} {unidad})")
+
+    if res.hidratacion:
+        n, x, y = res.posicion_Tmax()
+        j = int(np.argmax(res.dT_t))
+        print(f"\nCriterios del curso (ΔT con Tmin a {res.profundidad * 1000:g} mm del borde):")
+        print(f"  Tmax  = {res.T.max():.2f} °C a las {res.t[n] / 3600:.0f} h en ({x:g}, {y:g})   "
+              f"límite 70 °C: {'CUMPLE' if res.T.max() <= 70 else 'NO CUMPLE'}")
+        print(f"  ΔTmax = {res.dT_t[j]:.2f} °C a las {res.t[j] / 3600:.0f} h   "
+              f"límite 20 °C: {'CUMPLE' if res.dT_t[j] <= 20 else 'NO CUMPLE'}")
+        print("  (la cara a 10 °C fijos es una condición extrema: en la fundación real el borde es Robin)")
+
+    hay_exacta = res.T_puntos_exacta is not None
+    print("\nPuntos" + (" (numérica vs. exacta)" if hay_exacta else "") + ":")
+    for j, p in enumerate(res.puntos):
+        nota = "   <- está en el borde: T = Tb siempre" if en_el_borde(p, Lx, Ly, args.origen) else ""
+        error = (f", error máx vs. exacta = {abs(res.T_puntos[:, j] - res.T_puntos_exacta[:, j]).max():.3f} °C"
+                 if hay_exacta else "")
+        if res.hidratacion:
+            i = int(np.argmax(res.T_puntos[:, j]))
+            print(f"  ({p[0]:g}, {p[1]:g}): máx {res.T_puntos[i, j]:.2f} °C a las {res.t[i] / 3600:.0f} h, "
+                  f"T final = {res.T_puntos[-1, j]:.3f} °C{error}{nota}")
+            continue
+        llego = np.abs(res.T_puntos[:, j] - args.Tb) <= 0.5 * abs(args.Ti - args.Tb)
+        mitad = f"{res.t[np.argmax(llego)] / f:.2f} {unidad}" if llego.any() else "—"
+        print(f"  ({p[0]:g}, {p[1]:g}): T final = {res.T_puntos[-1, j]:.3f} °C, recorre la mitad del salto "
+              f"a los {mitad}{error}{nota}")
+    if hay_exacta:
+        print(f"Error máx en todo el campo (t > 0): {res.error_campo[1:].max():.3f} °C "
+              f"(en t = {res.t[1 + np.argmax(res.error_campo[1:])] / f:.2f} {unidad}, por el salto inicial en el borde); "
+              f"al final: {res.error_campo[-1]:.2e} °C")
+
+    sufijo = {None: "", "ju-lei": "_hidratacion", "pulso": "_pulso"}[args.hidratacion]
+    salida = Path(args.salida or f"resultados/rectangulo_2d{sufijo}")
+    salida.mkdir(parents=True, exist_ok=True)
+    nombres, columnas = ["t_s"], [res.t]
+    for j, p in enumerate(res.puntos):
+        nombres.append(f"T({p[0]:g};{p[1]:g})_num")
+        columnas.append(res.T_puntos[:, j])
+        if res.T_puntos_exacta is not None:
+            nombres.append(f"T({p[0]:g};{p[1]:g})_exacta")
+            columnas.append(res.T_puntos_exacta[:, j])
+    if res.hidratacion:
+        nombres += ["Tmax_C", f"Tmin_{res.profundidad * 1000:g}mm_C", "dT_C"]
+        columnas += [res.Tmax_t, res.Tmin_superficie, res.dT_t]
+    np.savetxt(salida / "serie_puntos.csv", np.column_stack(columnas), delimiter=",", header=",".join(nombres),
+               comments="", fmt="%.6f")
+    resumen = {
+        "Lx_m": Lx, "Ly_m": Ly, "dx_m": args.dx, "k": k, "rho": args.rho, "cp": args.cp, "alpha_m2_s": res.alpha,
+        "Ti_C": args.Ti, "Tb_C": args.Tb, "origen": args.origen, "puntos": res.puntos,
+        "hidratacion": args.hidratacion or "ninguna", "dt_s": res.dt, "dt_max_s": res.dt_max,
+        "dt_critico_s": res.dt_critico, "dt_critico_interior_s": res.dt_critico_interior,
+        "tau_s": res.tau, "t_estabilizacion_estimado_sin_hidratacion_s": res.t_estabilizacion_estimado,
+        "t_estabilizacion_simulado_s": res.t_estabilizacion, "t_final_s": float(res.t[-1]),
+    }
+    if isinstance(modelo, CalorPulsoCoseno):
+        resumen.update({"Qmax_W_m3": modelo.Q_max, "T_calor_h": modelo.T_h,
+                        "elevacion_adiabatica_C": float(modelo.energia(modelo.T_h) / (args.rho * args.cp))})
+    if res.hidratacion:
+        n, x, y = res.posicion_Tmax()
+        resumen.update({"Tmax_C": float(res.T.max()), "t_Tmax_h": float(res.t[n] / 3600), "posicion_Tmax_m": [x, y],
+                        "dTmax_C": float(res.dT_t.max()), "t_dTmax_h": float(res.t[np.argmax(res.dT_t)] / 3600)})
+    if hay_exacta:
+        resumen["error_max_puntos_C"] = float(abs(res.T_puntos - res.T_puntos_exacta).max())
+    (salida / "resumen.json").write_text(json.dumps(resumen, indent=2), encoding="utf-8")
+
+    from .graficos import animar_rectangulo, graficar_campos_rectangulo, graficar_puntos_rectangulo
+
+    rutas = [salida / "puntos.png", salida / "campos.png"]
+    graficar_puntos_rectangulo(res, rutas[0])
+    graficar_campos_rectangulo(res, rutas[1])
+    if not args.sin_animacion:
+        rutas.append(salida / "evolucion.gif")
+        animar_rectangulo(res, rutas[-1], fps=args.fps)
+    print(f"\nArchivos: {', '.join(str(r) for r in rutas)}, {salida / 'serie_puntos.csv'}, {salida / 'resumen.json'}")
+    print(f"Cómputo de la simulación: {computo:.2f} s")
+    return 0
+
+
 def cmd_ifc_crear(args):
     from .ifc_io import crear_modelo_base
 
@@ -252,6 +384,31 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--n", type=int, default=10, help="celdas por eje")
     s.add_argument("--dos-materiales", action="store_true", help="mitad hormigón, mitad suelo")
     s.set_defaults(func=cmd_energia)
+
+    s = sub.add_parser("rectangulo", help="Rectángulo 2D a Ti con el borde a Tb: dt crítico, animación y T(t) en puntos")
+    s.add_argument("--L", type=float, nargs=2, default=[4.0, 2.0], metavar=("LX", "LY"), help="lados [m]")
+    s.add_argument("--dx", type=float, default=0.1, help="tamaño de celda (dx = dy) [m]")
+    s.add_argument("--k", type=float, default=2.222, help="conductividad [W/(m·K)] (hormigón de Ju y Lei)")
+    s.add_argument("--rho", type=float, default=2400.0, help="densidad [kg/m³]")
+    s.add_argument("--cp", type=float, default=970.0, help="calor específico [J/(kg·K)]")
+    s.add_argument("--alpha", type=float, help="difusividad [m²/s]: si se indica, k = alpha·rho·cp")
+    s.add_argument("--Ti", type=float, default=20.0, help="temperatura inicial [°C]")
+    s.add_argument("--Tb", type=float, default=10.0, help="temperatura del borde [°C]")
+    s.add_argument("--punto", type=float, nargs=2, action="append", metavar=("X", "Y"),
+                   help="punto a seguir (repetible); por defecto (0, 0) y (1, 0.5)")
+    s.add_argument("--origen", choices=("centro", "esquina"), default="centro", help="dónde está (0, 0)")
+    s.add_argument("--t", type=float, help="tiempo final [s] (por defecto, 1,2 × el de estabilización)")
+    s.add_argument("--tolerancia", type=float, default=0.1, help="|T − Tb| para considerar estable [°C]")
+    s.add_argument("--cuadros", type=int, default=150, help="instantes guardados (cuadros del GIF)")
+    s.add_argument("--fps", type=int, default=15)
+    s.add_argument("--hidratacion", nargs="?", const="ju-lei", choices=("ju-lei", "pulso"),
+                   help="calor de hidratación: sola = Ju y Lei (2019); 'pulso' = Q(t) = Qmax/2·(1 − cos(2πt/T)), t < T")
+    s.add_argument("--Qmax", type=float, default=1800.0, help="pulso: calor máximo [W/m³] (≈ 2,79 °C/h de Ju y Lei)")
+    s.add_argument("--T-calor", type=float, default=42.0, help="pulso: duración T [h] (máximo en T/2 = 21 h)")
+    s.add_argument("--dt-max", type=float, help="tope de dt por precisión [s] (por defecto 150 con hidratación)")
+    s.add_argument("--sin-animacion", action="store_true")
+    s.add_argument("--salida", help="carpeta (por defecto resultados/rectangulo_2d[_hidratacion])")
+    s.set_defaults(func=cmd_rectangulo)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

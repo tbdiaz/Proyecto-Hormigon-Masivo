@@ -137,9 +137,184 @@ T, dt = simular_hasta(T_inicial, alpha, (dx, dy, dz), t_final=3600.0, fuente=q,
                       bordes={"z_max": ("robin", (27.8, 15.0)), "z_min": ("dirichlet", 15.0)})
 ```
 
-## 7. Limitaciones actuales
+## 7. Ejercicio de la pizarra: rectángulo que se enfría por el borde
+
+**Enunciado.** Rectángulo de 4 m × 2 m que resuelve $\rho c_p\,\partial T/\partial t - k\nabla^2 T = 0$:
+
+- inicio a $T(x,y,0) = 20$ °C;
+- todo el borde $\Gamma$ a 10 °C para todo $t$ (Dirichlet, "condición de borde esencial");
+- celdas cuadradas, $\Delta x = \Delta y$.
+
+Se pide el $\Delta t$ crítico, simular hasta estabilizar, la animación de la evolución y $T(t)$ en dos puntos.
+
+```powershell
+mcplan rectangulo                                        # hormigón de Ju y Lei, puntos (0, 0) y (1, 0.5)
+mcplan rectangulo --alpha 1e-4                           # difusividad de la guía (horas en vez de días)
+mcplan rectangulo --punto 0 0 --punto 1 1 --dx 0.05      # otros puntos y otra malla
+mcplan rectangulo --origen esquina --punto 2 1 --punto 3 1.5
+```
+
+Genera los siguientes archivos en `resultados/rectangulo_2d/`:
+
+- `evolucion.gif`: la animación;
+- `puntos.png`: T(t) numérica contra la exacta;
+- `campos.png`: cuatro instantes del campo;
+- `serie_puntos.csv` y `resumen.json`.
+
+**Coordenadas.** Como en la pizarra, (0, 0) es el centro del rectángulo. Con esa convención, **(1, 1) cae en el
+borde superior** y vale 10 °C siempre. Por eso el segundo punto por defecto es (1, 0.5). El comando avisa
+cuando un punto está en el borde.
+
+**Solución exacta.** Por separación de variables, es el producto de dos losas 1D (la serie de `mcplan verificar`):
+
+$$\frac{T - T_b}{T_i - T_b} = X(x,t)\,Y(y,t), \qquad X = \sum_{m\ \text{impar}} \frac{4}{m\pi}\sin\frac{m\pi x}{L_x}\,e^{-\alpha (m\pi/L_x)^2 t}$$
+
+A tiempos largos manda el primer modo, que vale $\tfrac{16}{\pi^2}(T_i - T_b)$ en el centro y decae con
+$e^{-t/\tau}$, donde $\tau = 1/(\alpha\lambda_1)$ y $\lambda_1 = (\pi/L_x)^2 + (\pi/L_y)^2$. De ahí sale el tiempo
+para quedar a menos de 0,1 °C de $T_b$ en todo el rectángulo:
+
+$$t_{est} = \tau \ln\frac{(16/\pi^2)\,|T_i - T_b|}{0{,}1} \approx 5{,}1\,\tau$$
+
+**Resultados** con $\Delta x = 0{,}1$ m (40 × 20 celdas):
+
+| | Hormigón ($\alpha = 9{,}5\times10^{-7}$ m²/s) | Guía ($\alpha = 10^{-4}$ m²/s) |
+|---|---|---|
+| $\Delta t$ crítico, celda interior $\Delta x^2/4\alpha$ | 2619 s | 25,0 s |
+| $\Delta t$ crítico, junto al borde $\Delta x^2/6\alpha$ (**manda**) | 1746 s | 16,7 s |
+| $\Delta t$ usado (se guarda al menos cada 1 h) | 1198 s | 14,7 s |
+| Constante de tiempo $\tau$ | 3,93 días | 0,90 h |
+| Estabilización estimada / simulada | 20,0 / 20,0 días | 4,58 / 4,58 h |
+| Error máx. en los puntos vs. exacta | 0,03 °C | 0,03 °C |
+
+- El centro se queda unas horas en 20 °C, porque el frío todavía no llega desde los bordes, y después cae
+  hacia 10 °C sin alcanzarlo nunca. El punto (1, 0.5) está más cerca del borde y se enfría antes: recorre
+  la mitad del salto en 2,4 días, contra 4,4 días del centro.
+- El error del campo es máximo en la primera hora (0,65 °C en las celdas junto al borde, por el salto de 20 a
+  10 °C en $t = 0$) y al final baja a 4e-5 °C.
+- En tiempo adimensional ($t/\tau$), las curvas de los dos materiales son iguales: sólo cambia la escala de tiempo.
+
+![T(t) en los puntos](img/rectangulo_puntos.png)
+
+![Campo en cuatro instantes](img/rectangulo_campos.png)
+
+![Evolución](img/rectangulo_evolucion.gif)
+
+### 7.1 El mismo rectángulo con calor de hidratación
+
+```powershell
+mcplan rectangulo --hidratacion          # resultados/rectangulo_2d_hidratacion/
+```
+
+Ahora la ecuación es $\rho c_p\,\partial T/\partial t - k\nabla^2 T = Q$, con el calor de Ju y Lei (2019). Es el
+mismo modelo del solver 1D (`hidratacion.py`):
+
+$$Q = \rho c_p \frac{d\theta}{dt_e}\frac{dt_e}{dt}, \qquad \frac{dt_e}{dt} = \exp\left[\frac{E_h}{R}\left(\frac{1}{T_{ref}} - \frac{1}{T}\right)\right]$$
+
+- **Edad equivalente por celda.** Cada celda (vóxel) lleva su propia edad equivalente $t_e$: el centro, más
+  caliente, envejece más rápido que las celdas junto al borde.
+- **Esquema explícito, igual que en 1D.** Por paso: $Q$ se evalúa con $T^n$ y $t_e^n$, luego
+  $t_e^{n+1} = t_e^n + \Delta t \cdot dt_e/dt$, y por último $T^{n+1}$.
+- **Paso de tiempo.** La fuente no cambia el $\Delta t$ crítico, que sigue siendo 1746 s. Pero se limita a
+  **150 s por precisión**, por el estudio de $\Delta t$ del modelo 1D: aquí el centro llega a subir 4 °C/h
+  (a las 16 h).
+- **Tiempo para estabilizar.** Ya no hay fórmula cerrada. El comando simula por bloques de 30 días hasta que
+  todo el rectángulo queda a ±0,1 °C, y después simula 1,2 veces ese tiempo.
+
+**Verificación:**
+
+- `test_hidratacion_2d_igual_al_solver_1d`: una losa de 2 m entre dos caras a 10 °C, simulada en 2D con las
+  caras laterales adiabáticas, da **lo mismo que el solver 1D** (diferencia de 1e-14 °C).
+- `test_bloque_adiabatico_2d_sigue_la_curva_del_ensayo`: sin pérdidas, cada celda reproduce el ensayo
+  adiabático $T = T_0 + \theta(t_e)$.
+- `test_hidratacion_solo_en_el_hormigon`: la edad sólo avanza en las celdas de hormigón (máscara `es_hormigon`).
+
+**Resultados** (hormigón, $\Delta x = 0{,}1$ m, $\Delta t = 150$ s):
+
+| | Valor |
+|---|---|
+| Tmax | **71,9 °C** a las 46 h, en el centro. Supera 70 °C entre las 38 y las 57 h: **no cumple** |
+| Máximo en (1, 0.5) | 58,6 °C a las 39 h: cerca del borde se calienta menos y antes |
+| ΔTmax (Tmax − Tmin a 25 mm del borde) | **61,6 °C** a las 46 h. Sobre 20 °C entre las 14 y las 184 h: **no cumple** |
+| A los 14 días | Tmax 14,1 °C, ΔT 4,1 °C |
+| Estabilización (±0,1 °C) | 28,7 días, contra 20,0 sin hidratación: el calor generado retrasa el enfriamiento casi 9 días |
+
+- Con 2 m de espesor el calor no alcanza a salir mientras se genera: el centro sube 52 °C en 2 días.
+  En el ensayo adiabático subiría hasta 60 °C.
+- El borde fijo a 10 °C es una condición extrema: la superficie no se calienta nada, por eso ΔT es tan
+  grande. En la fundación real la superficie es Robin (convección), se calienta y ΔT baja. Es el mismo
+  mensaje de la sección 3: **la condición de borde domina el ΔT**.
+
+![T(t) y ΔT con hidratación](img/rectangulo_hidratacion_puntos.png)
+
+![Campo con hidratación](img/rectangulo_hidratacion_campos.png)
+
+![Evolución con hidratación](img/rectangulo_hidratacion_evolucion.gif)
+
+### 7.2 El mismo rectángulo con el pulso de calor de la clase
+
+```powershell
+mcplan rectangulo --hidratacion pulso                     # Qmax = 1800 W/m³, T = 42 h
+mcplan rectangulo --hidratacion pulso --Qmax 2500 --T-calor 36
+```
+
+Es la fórmula de la pizarra:
+
+$$Q(t) = \frac{Q_{max}}{2}\left(1 - \cos\frac{2\pi t}{T}\right) \quad (t < T), \qquad Q(t) = 0 \quad (t \ge T)$$
+
+- Parte en 0, llega a $Q_{max}$ en $t = T/2$ y vuelve a 0 en $t = T$.
+- Libera en total $Q_{max} T / 2$ [J/m³], es decir, una elevación adiabática de $Q_{max} T / (2\rho c_p)$.
+- Sólo depende del tiempo: no hay Arrhenius ni edad equivalente. El código lo implementa como
+  `CalorPulsoCoseno` en `hidratacion.py`, con la misma interfaz que Ju y Lei y $dt_e/dt = 1$.
+
+**Valores por defecto.** La pizarra no da $Q_{max}$ ni $T$, así que se tomaron de la curva de Ju y Lei:
+
+- su ritmo máximo es 2,79 °C/h a las 21 h, lo que da $Q_{max} = \rho c_p \cdot 2{,}79/3600 \approx 1800$ W/m³
+  y $T = 2 \cdot 21 = 42$ h;
+- la elevación adiabática total queda en 58,5 °C, cerca de los 60 °C del paper.
+
+Con `--Qmax` y `--T-calor` se cambian.
+
+**Solución exacta.** Como $Q$ no depende de $T$, el problema sigue siendo lineal: la solución es la del
+rectángulo sin calor más la respuesta a la fuente. La fuente uniforme se descompone en los modos
+$\sin(m\pi x/L_x)\sin(n\pi y/L_y)$, con $m, n$ impares y coeficientes $16/(mn\pi^2)$. Cada modo cumple
+
+$$\frac{dA}{dt} = -a A + \frac{16}{mn\pi^2}\frac{Q(t)}{\rho c_p}, \qquad a = \alpha\pi^2\left(\frac{m^2}{L_x^2} + \frac{n^2}{L_y^2}\right)$$
+
+y la integral $\int_0^t e^{-a(t-s)} Q(s)\,ds$ con el pulso coseno tiene forma cerrada. Se usan 200 × 200 modos,
+con error de truncamiento menor que 1e-3 °C.
+
+**Verificación:**
+
+- **Bloque adiabático:** sube exactamente $Q_{max}T/(2\rho c_p)$ (error < 1e-6 °C).
+- **Contra la exacta:** el error en los puntos es de 0,13 °C en el centro y 0,18 °C en (1, 0.5), con peaks de 76 °C.
+- **Convergencia en malla:** a las 42 h, el error máximo del campo baja 0,37 → 0,10 → 0,026 °C con
+  $\Delta x$ = 0,1 → 0,05 → 0,025 m, es decir, **orden 2**. Se concentra cerca de las esquinas; en el centro
+  es de 0,03 °C. No cambia al bajar $\Delta t$ de 150 a 30 s: es error de malla.
+
+**Resultados** (hormigón, $\Delta x = 0{,}1$ m, $\Delta t = 150$ s):
+
+| | Pulso de la clase | Ju y Lei (sección 7.1) |
+|---|---|---|
+| Tmax en el centro | **76,2 °C a las 38 h** | 71,9 °C a las 46 h |
+| Máximo en (1, 0.5) | 66,6 °C a las 35 h | 58,6 °C a las 39 h |
+| ΔTmax (25 mm del borde) | 65,9 °C | 61,6 °C |
+| Estabilización (±0,1 °C) | 28,4 días | 28,7 días |
+
+El pulso calienta más y antes que Ju y Lei por dos razones:
+
+- **Todo el calor sale en 42 h.** En Ju y Lei la curva tiene una cola que dura días.
+- **El ritmo no depende de la temperatura.** En Ju y Lei, las celdas frías junto al borde hidratan más lento
+  (Arrhenius).
+
+Las dos fuentes liberan parecida energía total, así que el enfriamiento final y la estabilización casi coinciden.
+
+![T(t) y ΔT con el pulso](img/rectangulo_pulso_puntos.png)
+
+![Evolución con el pulso](img/rectangulo_pulso_evolucion.gif)
+
+## 8. Limitaciones actuales
 
 - Dominio rectangular. La fundación octagonal requiere voxelizar el IFC: una máscara de celdas activas por vertida.
-- Bordes y fuente constantes en el tiempo. Faltan el clima horario y la hidratación ($\dot q$ depende de $T$
-  y de la edad equivalente), que ya existen en el solver 1D.
+- Bordes constantes en el tiempo: falta el clima horario, que ya existe en el solver 1D. La hidratación ya
+  está en 2D/3D (sección 7.1).
 - Malla uniforme en cada eje.

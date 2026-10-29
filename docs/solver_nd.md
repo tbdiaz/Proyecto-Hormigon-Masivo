@@ -312,9 +312,154 @@ Las dos fuentes liberan parecida energía total, así que el enfriamiento final 
 
 ![Evolución con el pulso](img/rectangulo_pulso_evolucion.gif)
 
-## 8. Limitaciones actuales
+## 8. Ejercicio de la pizarra: bloque 3D con el pulso y cuatro condiciones de borde
 
-- Dominio rectangular. La fundación octagonal requiere voxelizar el IFC: una máscara de celdas activas por vertida.
+**Enunciado.** Bloque de **3 m × 3 m × 0,6 m** de hormigón que resuelve $\rho c_p\,\partial T/\partial t - k\nabla^2 T = Q(t)$:
+
+- inicio a $T = 20$ °C;
+- $Q(t)$ es el pulso de la sección 7.2: $Q_{max} = 1800$ W/m³ y $T = 42$ h;
+- la misma condición de borde en las seis caras, en cuatro casos:
+
+| Caso | Condición | Significado |
+|---|---|---|
+| Dirichlet 20 °C | $T = 20$ °C | la cara se mantiene a 20 °C |
+| Dirichlet 30 °C | $T = 30$ °C | la cara se mantiene a 30 °C: el bloque además se calienta desde afuera |
+| Neumann | $\partial T/\partial n = 0$ | adiabático: no sale calor (el ensayo adiabático) |
+| Robin | $\partial T/\partial n = -\beta\,(T - 20)$ | convección con aire a 20 °C |
+
+**Qué es β.** No tiene que ver con Euler explícito, que es *cómo se avanza en el tiempo*. β es el
+coeficiente de la condición Robin: $-k\,\partial T/\partial n = h\,(T - T_{aire})$, de donde
+$\beta = h/k$ [1/m]. Mide qué tan fuerte la superficie entrega calor al aire comparado con lo que conduce el
+hormigón.
+
+- **Valor usado.** La pizarra no lo da, así que se usa $h = 27{,}8$ W/(m²K), el de hormigón–aire de Ju y Lei:
+  $\beta = 27{,}8/2{,}222 = 12{,}5$ 1/m. Se cambia con `--beta`.
+- **Signo.** Con la normal hacia afuera, el signo menos hace que salga calor cuando $T > T_{aire}$. El test
+  `test_exacta_robin_cumple_la_condicion_de_borde` lo verifica en la solución exacta.
+
+```powershell
+mcplan bloque                                      # los 4 casos (~2 min): resultados/bloque_3d/
+mcplan bloque --beta 5 --casos robin               # otro β
+mcplan bloque --T-dirichlet 15 25 --casos dirichlet
+mcplan bloque --dx 0.1 --sin-animacion             # más rápido (6 celdas en el espesor)
+```
+
+Genera, por caso, `puntos_<caso>.png` (T(t) numérica y exacta, Tmax, Tmin a 25 mm, ΔT), `cortes_<caso>.png`
+(planos horizontal y vertical centrales) y `serie_<caso>.csv`. Para los cuatro juntos genera `comparacion.png`,
+`evolucion.gif` y `resumen.json`.
+
+### 8.1 Solución exacta de los cuatro casos
+
+Como $Q$ sólo depende de $t$, el problema es lineal. Con el origen en el centro, cada eje (medio lado $l$)
+tiene modos simétricos $\cos(\mu s/l)$, donde $\mu \tan\mu = Bi = hl/k$:
+
+| Borde | Bi | Autovalores μ |
+|---|---|---|
+| Dirichlet | ∞ | $(2k-1)\pi/2$ |
+| Neumann | 0 | sólo $\mu = 0$: el campo queda uniforme |
+| Robin | $hl/k$ (3,75 en z; 18,8 en x e y) | raíces de $\mu\tan\mu = Bi$, una en cada $[(k-1)\pi,\,(k-1)\pi + \pi/2]$ (bisección) |
+
+La temperatura inicial y la fuente son uniformes, y el 1 se descompone como
+$1 = \sum_k b_k \cos(\mu_k s/l)$, con $b_k = 2\sin\mu_k / (\mu_k + \sin\mu_k\cos\mu_k)$. En 3D cada modo
+$(i, j, m)$ decae con $a = \alpha(\mu_i^2/l_x^2 + \mu_j^2/l_y^2 + \mu_m^2/l_z^2)$:
+
+$$T = T_{ref} + \sum_{i,j,m} b_i b_j b_m \cos\frac{\mu_i x}{l_x}\cos\frac{\mu_j y}{l_y}\cos\frac{\mu_m z}{l_z}\left[(T_i - T_{ref})\,e^{-at} + \frac{G(a,t)}{\rho c_p}\right]$$
+
+donde $T_{ref}$ es la temperatura de la cara o del aire, y $G(a,t) = \int_0^t e^{-a(t-s)}Q(s)\,ds$ es cerrada para
+el pulso. Se usan 100 × 100 × 60 modos, con error de truncamiento menor que 2e-3 °C. Robin con $h \to \infty$
+da Dirichlet, y Neumann da $T = 20 + \int Q\,dt/(\rho c_p)$: los tres bordes salen de la misma fórmula.
+
+### 8.2 Paso crítico según el borde
+
+En la celda de esquina, cada eje aporta 1 vecina más lo que aporte la cara (en unidades de $\alpha/\Delta x^2$):
+
+- Dirichlet: 2 (la cara a media celda);
+- Neumann: 0;
+- Robin: $h_{ef}\Delta x/k$, con $h_{ef} = 1/(1/h + \Delta x/2k)$.
+
+Con $\Delta x = 0{,}05$ m (60 × 60 × 12 = 43.200 celdas):
+
+| Caso | Esquina | Interior | Manda | Δt crítico |
+|---|---|---|---|---|
+| Dirichlet | 3·(1 + 2) = 9 | 6 | la esquina | $\Delta x^2/9\alpha$ = **291 s** |
+| Neumann | 3·(1 + 0) = 3 | 6 | el interior | $\Delta x^2/6\alpha$ = 436 s |
+| Robin (β = 12,5) | 3·(1 + 0,48) = 4,4 | 6 | el interior | $\Delta x^2/6\alpha$ = 436 s |
+
+En Robin, el Biot de una celda ($h\Delta x/k = 0{,}63$) es chico: la convección saca menos calor que una
+vecina, así que el borde no restringe. Igual se usa $\Delta t$ = 150 s, porque **la precisión manda**
+(hay que seguir el pulso). Son 3720 pasos por caso.
+
+### 8.3 Resultados
+
+Con $\Delta x = 0{,}05$ m, simulando 154 h (1,2 veces la estabilización más lenta, la de Robin):
+
+| Caso | Tmax | ΔTmax (25 mm) | Equilibrio | Estabiliza (±0,1 °C), exacta / simulada | Error vs. exacta |
+|---|---|---|---|---|---|
+| Dirichlet 20 °C | 46,9 °C a las 29 h | 26,5 °C | 20 °C | 92,7 / 92,9 h | 0,23 °C |
+| Dirichlet 30 °C | 56,0 °C a las 29 h | 25,7 °C | 30 °C | 92,5 / 92,7 h | 0,23 °C |
+| Neumann | **78,5 °C** al terminar el pulso | 0 | 78,45 °C (se queda) | 39,3 / 39,4 h | 0,06 °C |
+| Robin β = 12,5 | 53,9 °C a las 31 h | **31,1 °C** | 20 °C | 128,5 / 128,8 h | 0,15 °C |
+
+En los cuatro casos Tmax está en el centro (0, 0, 0). El error es el máximo en todo el campo y en todo el
+tiempo; al final baja a 1e-5 °C.
+
+**Lectura física:**
+
+- **Mismo bloque y mismo calor: el borde decide todo.** Tmax va de 47 a 78 °C según la condición de borde.
+- **Neumann es el ensayo adiabático.** Nada sale, todo el bloque sube $Q_{max}T/(2\rho c_p) = 58{,}45$ °C de
+  forma uniforme y se queda ahí. Es la cota superior y **no cumple 70 °C**, pero ΔT = 0 porque no hay gradiente.
+- **Dirichlet 30 °C es Dirichlet 20 °C más 10 °C que entran desde la cara (superposición).** En el peak la
+  diferencia es 9,2 °C, porque a las 29 h esos 10 °C todavía no llegan del todo al centro.
+- **Robin queda entre Dirichlet y Neumann:**
+  - la superficie se calienta (deja de estar fija), así que sale menos calor y el centro llega más alto que
+    con Dirichlet 20 °C;
+  - la superficie se calienta poco, así que **ΔT es el mayor** de los cuatro casos;
+  - tarda más en estabilizarse, porque el aire saca el calor más lento que una cara fija.
+- **El espesor de 0,6 m manda sobre los 3 m de planta.** La constante de tiempo de Dirichlet es
+  $\tau \approx 10$ h y el gradiente es casi todo vertical, como se ve en los cortes.
+
+**Error de Euler en el tiempo (Neumann).** El campo es uniforme, así que no hay error de malla: los
+0,06 °C son el atraso de medio paso del esquema explícito, $(\Delta t/2)\,Q/(\rho c_p) = 75 \cdot 7{,}7\times10^{-4}$.
+Al terminar el pulso desaparece (1e-8 °C), porque la suma de Riemann del pulso completo es exacta.
+
+**Convergencia en malla** (error máximo desde las 6 h, hasta las 36 h):
+
+| Δx [m] | celdas en el espesor | Dirichlet 20: centro / campo | Robin: centro / campo |
+|---|---|---|---|
+| 0,2 | 3 | 2,48 / 2,71 °C | 1,42 / 1,76 °C |
+| 0,1 | 6 | 0,28 / 0,82 °C | 0,37 / 0,51 °C |
+| 0,05 | 12 | 0,075 / 0,23 °C | 0,098 / 0,14 °C |
+| orden (0,1 → 0,05) | | 1,9 / 1,9 | 1,9 / 1,8 |
+
+Con 3 celdas en el espesor la malla todavía no está en el régimen asintótico. De 6 a 12 celdas, el error se
+divide por ~4: **orden 2**.
+
+![Comparación de los cuatro casos](img/bloque_comparacion.png)
+
+![Cortes del caso Robin](img/bloque_cortes_robin.png)
+
+![Evolución de los cuatro casos](img/bloque_evolucion.gif)
+
+**Tests** (`tests/test_bloque.py`, 19):
+
+- autovalores de los tres bordes y descomposición del 1;
+- Robin cumple $\partial T/\partial n = -\beta(T - 20)$;
+- Dirichlet vale $T_b$ en la cara;
+- Robin con $h \to \infty$ da Dirichlet;
+- Neumann es la elevación adiabática;
+- flujo en la cara Robin e interpolación trilineal;
+- simetría;
+- Δt crítico por borde;
+- estabilización simulada igual a la exacta;
+- convergencia de orden 2;
+- el comando completo.
+
+Los lentos van marcados: `pytest -m "not lento"` corre la batería rápida.
+
+## 9. Limitaciones actuales
+
+- Dominio rectangular (rectángulo, bloque). La fundación octagonal requiere voxelizar el IFC: una máscara de
+  celdas activas por vertida.
 - Bordes constantes en el tiempo: falta el clima horario, que ya existe en el solver 1D. La hidratación ya
   está en 2D/3D (sección 7.1).
 - Malla uniforme en cada eje.

@@ -127,13 +127,7 @@ def _respuesta_pulso(xs, ys, t, Lx, Ly, alpha, rho, cp, pulso, n_terminos=401):
     m = np.arange(1, n_terminos + 1, 2)
     a = alpha * pi**2 * ((m[:, None] / Lx) ** 2 + (m[None, :] / Ly) ** 2)
     c = 16.0 / (pi**2 * m[:, None] * m[None, :])
-    T_s = pulso.T_h * 3600.0
-    w = 2.0 * pi / T_s
-    if t <= T_s:
-        G = 0.5 * pulso.Q_max * ((1.0 - np.exp(-a * t)) / a
-                                 - (a * np.cos(w * t) + w * np.sin(w * t) - a * np.exp(-a * t)) / (a**2 + w**2))
-    else:  # después del pulso, cada modo sólo decae
-        G = 0.5 * pulso.Q_max * (1.0 - np.exp(-a * T_s)) * w**2 / (a * (a**2 + w**2)) * np.exp(-a * (t - T_s))
+    G = pulso.integral_amortiguada(a, t)
     Sx = np.sin(pi * np.outer(xs, m) / Lx)
     Sy = np.sin(pi * np.outer(ys, m) / Ly)
     return Sx @ (c * G) @ Sy.T / (rho * cp)

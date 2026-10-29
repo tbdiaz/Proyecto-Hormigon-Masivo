@@ -99,6 +99,27 @@ class CalorPulsoCoseno:
         t = np.clip(np.asarray(t_h, dtype=float), 0.0, self.T_h)
         return 0.5 * self.Q_max * 3600.0 * (t - self.T_h / (2.0 * np.pi) * np.sin(2.0 * np.pi * t / self.T_h))
 
+    def integral_amortiguada(self, a, t_s):
+        """G(a, t) = int_0^t e^{-a (t - s)} Q(s) ds [J/m3], cerrada para el pulso coseno.
+
+        Es la respuesta de un modo que decae con tasa a [1/s] a la fuente Q(t):
+        dA/dt = -a A + Q(t)  ->  A(t) = G(a, t). Con a = 0 es la energía liberada.
+        """
+        a = np.asarray(a, dtype=float)
+        T_s = self.T_h * 3600.0
+        w = 2.0 * np.pi / T_s
+        G = np.full(a.shape, float(self.energia(t_s / 3600.0)))  # a = 0: sin decaimiento
+        m = a > 0
+        b = a[m]
+        if t_s <= T_s:
+            G[m] = 0.5 * self.Q_max * ((1.0 - np.exp(-b * t_s)) / b
+                                       - (b * np.cos(w * t_s) + w * np.sin(w * t_s) - b * np.exp(-b * t_s))
+                                       / (b**2 + w**2))
+        else:  # después del pulso, cada modo sólo decae desde su valor en t = T
+            G[m] = (0.5 * self.Q_max * (1.0 - np.exp(-b * T_s)) * w**2 / (b * (b**2 + w**2))
+                    * np.exp(-b * (t_s - T_s)))
+        return G
+
     def factor_arrhenius(self, T_C):
         """dte/dt = 1: el pulso no depende de la temperatura."""
         return np.ones_like(np.asarray(T_C, dtype=float))

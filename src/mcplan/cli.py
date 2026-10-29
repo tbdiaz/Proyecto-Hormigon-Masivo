@@ -8,6 +8,8 @@
     mcplan energia    --dim 2|3 [--dos-materiales] [--t 259200]
     mcplan rectangulo [--L 4 2] [--dx 0.1] [--alpha 1e-4] [--Ti 20] [--Tb 10] [--punto 0 0 --punto 1 0.5]
                       [--hidratacion [ju-lei|pulso]] [--Qmax 1800] [--T-calor 42]
+    mcplan bloque     [--L 3 3 0.6] [--dx 0.05] [--casos dirichlet neumann robin] [--T-dirichlet 20 30] [--beta 12.5]
+    mcplan bloque-3d  [--res 1280 720] [--muestras 32]   (animación 3D con Blender: MP4 y GIF)
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -296,6 +298,165 @@ def cmd_rectangulo(args):
     return 0
 
 
+def cmd_bloque(args):
+    from pathlib import Path
+
+    import numpy as np
+
+    from .bloque import CasoBorde, H_HORMIGON_AIRE, simular_bloque, t_final_comun
+    from .hidratacion import CalorPulsoCoseno
+
+    L = tuple(args.L)
+    k = args.k
+    h = args.beta * k if args.beta is not None else H_HORMIGON_AIRE
+    casos = []
+    if "dirichlet" in args.casos:
+        casos += [CasoBorde("dirichlet", T) for T in args.T_dirichlet]
+    if "neumann" in args.casos:
+        casos.append(CasoBorde("neumann"))
+    if "robin" in args.casos:
+        casos.append(CasoBorde("robin", args.T_aire, h))
+    pulso = CalorPulsoCoseno(args.Qmax, args.T_calor)
+    puntos = [tuple(p) for p in args.punto] if args.punto else [(0.0, 0.0, 0.275), (1.2, 1.2, 0.2)]
+    alpha = k / (args.rho * args.cp)
+    n = tuple(round(Li / args.dx) for Li in L)
+    t_final = args.t or t_final_comun(casos, L, k, args.rho, args.cp, args.Ti, pulso, args.tolerancia)
+
+    E = float(pulso.energia(pulso.T_h))
+    print(f"Bloque {L[0]:g} x {L[1]:g} x {L[2]:g} m, Ti = {args.Ti:g} °C, origen en "
+          f"{'el centro (x, y en ±' + f'{L[0] / 2:g}, z en ±{L[2] / 2:g})' if args.origen == 'centro' else 'una esquina de la base'}")
+    print(f"Material: k = {k:g} W/(m·K), rho = {args.rho:g} kg/m³, cp = {args.cp:g} J/(kg·K) -> alpha = {alpha:.4g} m²/s")
+    print(f"Calor (pulso de la clase): Q(t) = Qmax/2·(1 − cos(2πt/T)) si t < T; Qmax = {pulso.Q_max:g} W/m³, "
+          f"T = {pulso.T_h:g} h -> energía {E / 1e6:.1f} MJ/m³, elevación adiabática {E / (args.rho * args.cp):.2f} °C")
+    print(f"Malla: dx = dy = dz = {args.dx:g} m, {n[0]} x {n[1]} x {n[2]} = {np.prod(n)} celdas")
+    print("Robin: −k ∂T/∂n = h (T − T_aire), o sea ∂T/∂n = −β (T − T_aire) con β = h/k "
+          f"(h = {h:g} W/(m²K){' de Ju y Lei' if args.beta is None else ''}, β = {h / k:.3f} 1/m)")
+    print(f"Tiempo simulado: {t_final / 3600:.1f} h "
+          f"({'1,2 × la estabilización exacta más lenta' if args.t is None else 'indicado con --t'})")
+
+    print("\nPaso crítico (Euler explícito: el coeficiente de T_i, 1 − dt·ΣG/C, debe ser ≥ 0):")
+    print(f"  celda interior: 6 vecinas -> dx²/(6α) = {args.dx ** 2 / (6 * alpha):.1f} s")
+    resultados = []
+    for caso in casos:
+        res = simular_bloque(caso, L, args.dx, k, args.rho, args.cp, args.Ti, pulso, puntos, args.origen, t_final,
+                             args.tolerancia, 0.025, args.dt_max, n_modos=(100, 100, 60), con_exacta=not args.sin_exacta)
+        resultados.append(res)
+        # Celda de esquina: por eje, 1 vecina + la cara (Dirichlet: 2; Neumann: 0; Robin: h_ef dx / k).
+        cara = {"dirichlet": 2.0, "neumann": 0.0,
+                "robin": (1.0 / (1.0 / caso.h + args.dx / (2 * k))) * args.dx / k if caso.tipo == "robin" else 0.0}
+        factor = 3 * (1 + cara[caso.tipo])
+        manda = "la esquina" if factor > 6 else "el interior"
+        print(f"  {caso.etiqueta(k):45s} esquina 3·(1 + {cara[caso.tipo]:.3f}) = {factor:.2f} "
+              f"-> manda {manda}: dt crítico = {res.dt_critico:.1f} s")
+    print(f"  tope de precisión dt_max = {args.dt_max:g} s (para seguir el pulso) -> dt usado = {resultados[0].dt:.1f} s, "
+          f"{round(t_final / resultados[0].dt)} pasos por caso")
+
+    print(f"\n{'Caso':38s} {'Tmax [°C]':>10} {'t [h]':>6} {'ΔTmax':>7} {'T eq':>6} {'estabiliza exacta/simulada [h]':>31} "
+          f"{'error vs exacta: puntos / campo máx / final [°C]':>48}")
+    for r in resultados:
+        x, y, z = r.posicion_Tmax
+        sim = "—" if r.t_estabilizacion is None else f"{r.t_estabilizacion / 3600:.1f}"
+        if r.error_campo is not None:
+            err_pts = max(np.abs(r.T_centro - r.T_centro_exacta)[1:].max(),
+                          np.abs(r.T_puntos - r.T_puntos_exacta)[1:].max() if r.puntos else 0.0)
+            errores = f"{err_pts:.3f} / {r.error_campo.max():.3f} / {r.error_campo[-1]:.1e}"
+        else:
+            errores = "(sin exacta)"
+        print(f"{r.caso.etiqueta(k):38s} {r.Tmax:10.2f} {r.t_Tmax / 3600:6.0f} {r.dT_t.max():7.2f} {r.T_eq:6.2f} "
+              f"{r.t_estabilizacion_exacta / 3600:>20.1f} / {sim:<8s} {errores:>48}")
+        print(f"{'':38s} Tmax en ({x:g}, {y:g}, {z:g}); cómputo {r.computo_s:.1f} s; "
+              f"límites 70/20 °C: {'CUMPLE' if r.Tmax <= 70 else 'NO CUMPLE'} / "
+              f"{'CUMPLE' if r.dT_t.max() <= 20 else 'NO CUMPLE'}")
+
+    salida = Path(args.salida)
+    salida.mkdir(parents=True, exist_ok=True)
+    from .graficos import animar_bloque, graficar_comparacion_bloque, graficar_cortes_bloque, graficar_puntos_bloque
+
+    rutas = []
+    resumen = {"L_m": L, "dx_m": args.dx, "k": k, "rho": args.rho, "cp": args.cp, "alpha_m2_s": alpha,
+               "Ti_C": args.Ti, "Qmax_W_m3": pulso.Q_max, "T_calor_h": pulso.T_h, "h_robin": h, "beta_1_m": h / k,
+               "t_final_s": t_final, "dt_s": resultados[0].dt, "puntos": puntos, "origen": args.origen, "casos": {}}
+    for r in resultados:
+        nombre = r.caso.nombre
+        nombres, columnas = ["t_s", "T_centro"], [r.t, r.T_centro]
+        if r.T_centro_exacta is not None:
+            nombres.append("T_centro_exacta")
+            columnas.append(r.T_centro_exacta)
+        for j, p in enumerate(r.puntos):
+            etiqueta = ";".join(f"{c:g}" for c in p)
+            nombres.append(f"T({etiqueta})")
+            columnas.append(r.T_puntos[:, j])
+            if r.T_puntos_exacta is not None:
+                nombres.append(f"T({etiqueta})_exacta")
+                columnas.append(r.T_puntos_exacta[:, j])
+        nombres += ["Tmax", "Tmin_25mm", "dT", "max_desvio_equilibrio"]
+        columnas += [r.Tmax_t, r.Tmin_cascara_t, r.dT_t, r.desvio_t]
+        if r.error_campo is not None:
+            nombres.append("error_campo_vs_exacta")
+            columnas.append(r.error_campo)
+        np.savetxt(salida / f"serie_{nombre}.csv", np.column_stack(columnas), delimiter=",",
+                   header=",".join(nombres), comments="", fmt="%.6f")
+        rutas += [salida / f"puntos_{nombre}.png", salida / f"cortes_{nombre}.png"]
+        graficar_puntos_bloque(r, rutas[-2])
+        graficar_cortes_bloque(r, rutas[-1])
+        resumen["casos"][nombre] = {
+            "condicion": r.caso.etiqueta(k), "dt_critico_s": r.dt_critico, "Tmax_C": r.Tmax,
+            "t_Tmax_h": r.t_Tmax / 3600, "posicion_Tmax_m": r.posicion_Tmax, "dTmax_C": float(r.dT_t.max()),
+            "T_equilibrio_C": r.T_eq, "t_estabilizacion_exacta_h": r.t_estabilizacion_exacta / 3600,
+            "t_estabilizacion_simulada_h": None if r.t_estabilizacion is None else r.t_estabilizacion / 3600,
+            "error_max_campo_C": None if r.error_campo is None else float(r.error_campo.max()),
+        }
+    (salida / "resumen.json").write_text(json.dumps(resumen, indent=2), encoding="utf-8")
+    rutas.append(salida / "comparacion.png")
+    graficar_comparacion_bloque(resultados, rutas[-1])
+    if not args.sin_animacion:
+        rutas.append(salida / "evolucion.gif")
+        animar_bloque(resultados, rutas[-1], fps=args.fps, cuadros=args.cuadros)
+    print(f"\nArchivos en {salida}: " + ", ".join(r.name for r in rutas) + ", serie_<caso>.csv, resumen.json")
+    return 0
+
+
+def cmd_bloque_3d(args):
+    import subprocess
+    from pathlib import Path
+
+    from .animacion3d import buscar_blender, crear_gif, generar_datos, script_render
+
+    salida = Path(args.salida).resolve()  # Blender necesita rutas absolutas
+    cuadros = salida / "cuadros"
+    salida.mkdir(parents=True, exist_ok=True)
+    for viejo in cuadros.glob("cuadro_*.png"):  # que no se mezclen cuadros de una corrida anterior
+        viejo.unlink()
+    datos = salida / "datos.npz"
+
+    t0 = time.perf_counter()
+    print(f"1/3 Simulando los cuatro casos con el solver 3D (dx = {args.dx:g} m)...", flush=True)
+    _, n_cuadros, (T_min, T_max) = generar_datos(datos, dx=args.dx, beta=args.beta)
+    print(f"    {n_cuadros} instantes, escala de colores {T_min:.1f} – {T_max:.1f} °C ({time.perf_counter() - t0:.0f} s)")
+    if args.solo_datos:
+        print(f"Datos: {datos}")
+        return 0
+
+    blender = buscar_blender(args.blender)
+    mp4 = salida / "bloque_3d.mp4"
+    print(f"2/3 Renderizando con Blender ({blender}), {args.res[0]}x{args.res[1]}, "
+          f"{len(range(0, n_cuadros, args.cada))} cuadros...", flush=True)
+    t1 = time.perf_counter()
+    comando = [blender, "-b", "--factory-startup", "--python", str(script_render()), "--",
+               str(datos), str(cuadros), "--res", str(args.res[0]), str(args.res[1]),
+               "--muestras", str(args.muestras), "--cada", str(args.cada), "--fps", str(args.fps), "--mp4", str(mp4)]
+    proceso = subprocess.run(comando, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    if proceso.returncode != 0 or not mp4.exists():
+        print(proceso.stdout[-3000:], proceso.stderr[-3000:], sep="\n", file=sys.stderr)
+        raise ValueError("Blender no terminó el render (ver el mensaje de arriba)")
+    print(f"    listo ({time.perf_counter() - t1:.0f} s)")
+
+    print("3/3 Armando el GIF...", flush=True)
+    gif = crear_gif(cuadros, salida / "bloque_3d.gif", ancho=args.gif_ancho, fps=args.fps, cada=args.gif_cada)
+    print(f"\nVideo: {mp4}\nGIF:   {gif}\nCuadros PNG: {cuadros}")
+    return 0
+
+
 def cmd_ifc_crear(args):
     from .ifc_io import crear_modelo_base
 
@@ -409,6 +570,47 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--sin-animacion", action="store_true")
     s.add_argument("--salida", help="carpeta (por defecto resultados/rectangulo_2d[_hidratacion])")
     s.set_defaults(func=cmd_rectangulo)
+
+    s = sub.add_parser("bloque", help="Bloque 3D con el pulso de calor: Dirichlet 20/30 °C, Neumann y Robin")
+    s.add_argument("--L", type=float, nargs=3, default=[3.0, 3.0, 0.6], metavar=("LX", "LY", "LZ"), help="lados [m]")
+    s.add_argument("--dx", type=float, default=0.05, help="tamaño de celda (dx = dy = dz) [m]")
+    s.add_argument("--casos", nargs="+", choices=("dirichlet", "neumann", "robin"),
+                   default=["dirichlet", "neumann", "robin"])
+    s.add_argument("--T-dirichlet", type=float, nargs="+", default=[20.0, 30.0], help="T de las caras [°C]")
+    s.add_argument("--beta", type=float, help="Robin: β = h/k [1/m] (por defecto h = 27,8 W/(m²K) de Ju y Lei)")
+    s.add_argument("--T-aire", type=float, default=20.0, help="Robin: temperatura del aire [°C]")
+    s.add_argument("--Ti", type=float, default=20.0, help="temperatura inicial [°C]")
+    s.add_argument("--Qmax", type=float, default=1800.0, help="pulso: calor máximo [W/m³]")
+    s.add_argument("--T-calor", type=float, default=42.0, help="pulso: duración T [h]")
+    s.add_argument("--k", type=float, default=2.222)
+    s.add_argument("--rho", type=float, default=2400.0)
+    s.add_argument("--cp", type=float, default=970.0)
+    s.add_argument("--punto", type=float, nargs=3, action="append", metavar=("X", "Y", "Z"),
+                   help="punto a seguir además del centro (repetible); por defecto (0, 0, 0.275) y (1.2, 1.2, 0.2)")
+    s.add_argument("--origen", choices=("centro", "esquina"), default="centro")
+    s.add_argument("--t", type=float, help="tiempo final [s] (por defecto 1,2 × la estabilización exacta más lenta)")
+    s.add_argument("--tolerancia", type=float, default=0.1, help="|T − T_eq| para considerar estable [°C]")
+    s.add_argument("--dt-max", type=float, default=150.0, help="tope de dt por precisión [s]")
+    s.add_argument("--cuadros", type=int, default=100)
+    s.add_argument("--fps", type=int, default=12)
+    s.add_argument("--sin-animacion", action="store_true")
+    s.add_argument("--sin-exacta", action="store_true", help="no calcula la solución exacta (más rápido)")
+    s.add_argument("--salida", default="resultados/bloque_3d")
+    s.set_defaults(func=cmd_bloque)
+
+    s = sub.add_parser("bloque-3d", help="Animación 3D (Blender) de los cuatro casos del bloque: MP4 y GIF")
+    s.add_argument("--dx", type=float, default=0.05, help="celda de la simulación [m]")
+    s.add_argument("--beta", type=float, help="Robin: β = h/k [1/m] (por defecto h = 27,8 W/(m²K))")
+    s.add_argument("--res", type=int, nargs=2, default=[1280, 720], metavar=("ANCHO", "ALTO"))
+    s.add_argument("--muestras", type=int, default=32, help="muestras de EEVEE por cuadro (calidad)")
+    s.add_argument("--cada", type=int, default=1, help="renderiza 1 de cada N instantes (1 instante = 1 h)")
+    s.add_argument("--fps", type=int, default=15)
+    s.add_argument("--gif-ancho", type=int, default=720)
+    s.add_argument("--gif-cada", type=int, default=2, help="el GIF usa 1 de cada N cuadros (más liviano)")
+    s.add_argument("--blender", help="ruta a blender.exe (por defecto la busca)")
+    s.add_argument("--solo-datos", action="store_true", help="sólo simula y guarda datos.npz (sin Blender)")
+    s.add_argument("--salida", default="resultados/bloque_3d_render")
+    s.set_defaults(func=cmd_bloque_3d)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

@@ -78,6 +78,7 @@ mcplan sinusoidal --dim 2 --n 20 --dt 9 --forzar                # dt > dt críti
 ```
 
 Detalle del solver 2D/3D, la estabilidad y la batería E05 en [`docs/solver_nd.md`](docs/solver_nd.md).
+Dossier de verificación y BIM base (E06): [`docs/dossier_verificacion.md`](docs/dossier_verificacion.md).
 
 **Ejercicio de la pizarra** (`mcplan rectangulo`): rectángulo de 4 × 2 m de hormigón a 20 °C con todo el borde a
 10 °C.

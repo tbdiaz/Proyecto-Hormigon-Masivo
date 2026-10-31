@@ -139,6 +139,9 @@ T, dt = simular_hasta(T_inicial, alpha, (dx, dy, dz), t_final=3600.0, fuente=q,
 
 ## 7. Ejercicio de la pizarra: rectángulo que se enfría por el borde
 
+> Las figuras y animaciones de los ejercicios (secciones 7 y 8) no se guardan en el repositorio:
+> se regeneran con `mcplan rectangulo` y `mcplan bloque` en `resultados/`.
+
 **Enunciado.** Rectángulo de 4 m × 2 m que resuelve $\rho c_p\,\partial T/\partial t - k\nabla^2 T = 0$:
 
 - inicio a $T(x,y,0) = 20$ °C;
@@ -193,12 +196,6 @@ $$t_{est} = \tau \ln\frac{(16/\pi^2)\,|T_i - T_b|}{0{,}1} \approx 5{,}1\,\tau$$
   10 °C en $t = 0$) y al final baja a 4e-5 °C.
 - En tiempo adimensional ($t/\tau$), las curvas de los dos materiales son iguales: sólo cambia la escala de tiempo.
 
-![T(t) en los puntos](img/rectangulo_puntos.png)
-
-![Campo en cuatro instantes](img/rectangulo_campos.png)
-
-![Evolución](img/rectangulo_evolucion.gif)
-
 ### 7.1 El mismo rectángulo con calor de hidratación
 
 ```powershell
@@ -243,12 +240,6 @@ $$Q = \rho c_p \frac{d\theta}{dt_e}\frac{dt_e}{dt}, \qquad \frac{dt_e}{dt} = \ex
 - El borde fijo a 10 °C es una condición extrema: la superficie no se calienta nada, por eso ΔT es tan
   grande. En la fundación real la superficie es Robin (convección), se calienta y ΔT baja. Es el mismo
   mensaje de la sección 3: **la condición de borde domina el ΔT**.
-
-![T(t) y ΔT con hidratación](img/rectangulo_hidratacion_puntos.png)
-
-![Campo con hidratación](img/rectangulo_hidratacion_campos.png)
-
-![Evolución con hidratación](img/rectangulo_hidratacion_evolucion.gif)
 
 ### 7.2 El mismo rectángulo con el pulso de calor de la clase
 
@@ -307,10 +298,6 @@ El pulso calienta más y antes que Ju y Lei por dos razones:
   (Arrhenius).
 
 Las dos fuentes liberan parecida energía total, así que el enfriamiento final y la estabilización casi coinciden.
-
-![T(t) y ΔT con el pulso](img/rectangulo_pulso_puntos.png)
-
-![Evolución con el pulso](img/rectangulo_pulso_evolucion.gif)
 
 ## 8. Ejercicio de la pizarra: bloque 3D con el pulso y cuatro condiciones de borde
 
@@ -433,12 +420,6 @@ Al terminar el pulso desaparece (1e-8 °C), porque la suma de Riemann del pulso 
 
 Con 3 celdas en el espesor la malla todavía no está en el régimen asintótico. De 6 a 12 celdas, el error se
 divide por ~4: **orden 2**.
-
-![Comparación de los cuatro casos](img/bloque_comparacion.png)
-
-![Cortes del caso Robin](img/bloque_cortes_robin.png)
-
-![Evolución de los cuatro casos](img/bloque_evolucion.gif)
 
 **Tests** (`tests/test_bloque.py`, 19):
 

@@ -399,6 +399,66 @@ def animar_bloque(resultados, ruta, fps=12, cuadros=100):
     _guardar_gif(fig, cuadro, indices, ruta, fps)
 
 
+# ---------------------------------------------------------------------------
+# Voxelización (voxelizacion.py)
+# ---------------------------------------------------------------------------
+
+def graficar_voxelizacion(vox, ruta):
+    """Cortes de la grilla coloreados por vertida: planta a media altura de cada vertida y corte vertical central."""
+    from matplotlib.colors import ListedColormap
+
+    colores = ["#ffffff", "#d9984d", "#4d8ccc", "#73b866", "#d16b73", "#9478c7"][:vox.n_vertidas + 1]
+    mapa = ListedColormap(colores)
+    x, y, z = (vox.centros(e) for e in range(3))
+    ext_xz = (x[0] - vox.dx / 2, x[-1] + vox.dx / 2, z[0] - vox.dx / 2, z[-1] + vox.dx / 2)
+    ext_xy = (x[0] - vox.dx / 2, x[-1] + vox.dx / 2, y[0] - vox.dx / 2, y[-1] + vox.dx / 2)
+    fig = plt.figure(figsize=(13, 7.2))
+    grilla = fig.add_gridspec(2, 3, height_ratios=[1, 1.15])
+    ax = fig.add_subplot(grilla[0, :])
+    j = int(np.argmin(np.abs(y)))
+    ax.imshow(vox.vertida_id[:, j, :].T, origin="lower", extent=ext_xz, cmap=mapa, vmin=0,
+              vmax=vox.n_vertidas, interpolation="nearest", aspect="auto")
+    ax.set_title(f"Corte vertical y = 0 (dx = {vox.dx:g} m): cada color es una vertida; los bordes inclinados quedan en escalera",
+                 fontsize=10)
+    ax.set_xlabel("x [m]")
+    ax.set_ylabel("z [m]")
+    for v in range(1, vox.n_vertidas + 1):
+        ax.plot([], [], "s", color=colores[v], label=f"{vox.nombres[v - 1]} (id {v})")
+    ax.legend(fontsize=8, ncol=2, loc="upper left")
+    for c, v in enumerate((1, 3, 5)):
+        if v > vox.n_vertidas:
+            break
+        k = int(np.round(np.mean(np.nonzero(np.any(vox.vertida_id == v, axis=(0, 1)))[0])))
+        axp = fig.add_subplot(grilla[1, c])
+        axp.imshow(vox.vertida_id[:, :, k].T, origin="lower", extent=ext_xy, cmap=mapa, vmin=0,
+                   vmax=vox.n_vertidas, interpolation="nearest")
+        axp.set_title(f"Planta z = {z[k]:.2f} m ({vox.nombres[v - 1]})", fontsize=10)
+        axp.set_xlabel("x [m]")
+        if c == 0:
+            axp.set_ylabel("y [m]")
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)
+
+
+def graficar_error_volumen(voxelizaciones, ruta):
+    """Error de volumen (total y por vertida) en función de dx."""
+    dxs = [v.dx for v in voxelizaciones]
+    fig, ax = plt.subplots(figsize=(7, 4.5))
+    ax.loglog(dxs, [abs(v.error_volumen_total) * 100 for v in voxelizaciones], "ko-", lw=2, label="total")
+    for i in range(1, voxelizaciones[0].n_vertidas + 1):
+        ax.loglog(dxs, [max(abs(v.error_volumen(i)) * 100, 1e-4) for v in voxelizaciones], ".--", alpha=0.7,
+                  label=voxelizaciones[0].nombres[i - 1])
+    ax.set_xlabel("dx [m]")
+    ax.set_ylabel("|error de volumen| [%]")
+    ax.set_title("Volumen voxelizado vs. IFC (con dx = 0,05 m las juntas caen en caras de celda)", fontsize=10)
+    ax.grid(alpha=0.3, which="both")
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)
+
+
 def graficar_todo(res: Resultado, met: MetricasTermicas, carpeta) -> list[Path]:
     carpeta = Path(carpeta)
     carpeta.mkdir(parents=True, exist_ok=True)

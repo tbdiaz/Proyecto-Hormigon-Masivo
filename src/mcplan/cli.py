@@ -9,7 +9,7 @@
     mcplan rectangulo [--L 4 2] [--dx 0.1] [--alpha 1e-4] [--Ti 20] [--Tb 10] [--punto 0 0 --punto 1 0.5]
                       [--hidratacion [ju-lei|pulso]] [--Qmax 1800] [--T-calor 42]
     mcplan bloque     [--L 3 3 0.6] [--dx 0.05] [--casos dirichlet neumann robin] [--T-dirichlet 20 30] [--beta 12.5]
-    mcplan bloque-3d  [--res 1280 720] [--muestras 32]   (animación 3D con Blender: MP4 y GIF)
+    mcplan voxelizar  [geometry/foundation.ifc] [--dx 0.05] [--estudio 0.5 0.25 0.1 0.05]
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -416,44 +416,69 @@ def cmd_bloque(args):
     return 0
 
 
-def cmd_bloque_3d(args):
-    import subprocess
-    from pathlib import Path
+def cmd_voxelizar(args):
+    import numpy as np
 
-    from .animacion3d import buscar_blender, crear_gif, generar_datos, script_render
+    from .ifc_io import leer_vertidas
+    from .voxelizacion import PlanVertidas, area_planta_octagono, caras, voxelizar
 
-    salida = Path(args.salida).resolve()  # Blender necesita rutas absolutas
-    cuadros = salida / "cuadros"
-    salida.mkdir(parents=True, exist_ok=True)
-    for viejo in cuadros.glob("cuadro_*.png"):  # que no se mezclen cuadros de una corrida anterior
-        viejo.unlink()
-    datos = salida / "datos.npz"
+    vertidas = leer_vertidas(args.ruta)
+    if not vertidas:
+        raise ValueError(f"{args.ruta} no tiene vertidas (Name = Vertida_01 ...)")
+    print(f"IFC: {args.ruta}  ({len(vertidas)} vertidas)")
+    print("Criterio: un vóxel pertenece a la vertida si su centro está dentro (paridad de cruces de un rayo vertical)")
 
-    t0 = time.perf_counter()
-    print(f"1/3 Simulando los cuatro casos con el solver 3D (dx = {args.dx:g} m)...", flush=True)
-    _, n_cuadros, (T_min, T_max) = generar_datos(datos, dx=args.dx, beta=args.beta)
-    print(f"    {n_cuadros} instantes, escala de colores {T_min:.1f} – {T_max:.1f} °C ({time.perf_counter() - t0:.0f} s)")
-    if args.solo_datos:
-        print(f"Datos: {datos}")
-        return 0
+    print(f"\nEstimación de volumen según dx (error relativo contra el volumen exacto de cada malla del IFC):")
+    print(f"{'dx [m]':>7} {'celdas':>10} " + " ".join(f"{v.nombre:>11}" for v in vertidas) + f" {'total':>9}")
+    estudio = []
+    for dx in sorted(args.estudio, reverse=True):
+        t0 = time.perf_counter()
+        v = voxelizar(vertidas, dx)
+        estudio.append(v)
+        print(f"{dx:7.3f} {np.count_nonzero(v.vertida_id):10d} "
+              + " ".join(f"{100 * v.error_volumen(i):+10.2f}%" for i in range(1, v.n_vertidas + 1))
+              + f" {100 * v.error_volumen_total:+8.3f}%   ({time.perf_counter() - t0:.1f} s)")
+    print("  (las juntas están a 0,55 / 1,10 / 2,20 / 3,30 m: si dx no las divide, una capa entera de celdas cae\n"
+          "   en la vertida vecina y el error por vertida es grande aunque el total sea chico)")
 
-    blender = buscar_blender(args.blender)
-    mp4 = salida / "bloque_3d.mp4"
-    print(f"2/3 Renderizando con Blender ({blender}), {args.res[0]}x{args.res[1]}, "
-          f"{len(range(0, n_cuadros, args.cada))} cuadros...", flush=True)
-    t1 = time.perf_counter()
-    comando = [blender, "-b", "--factory-startup", "--python", str(script_render()), "--",
-               str(datos), str(cuadros), "--res", str(args.res[0]), str(args.res[1]),
-               "--muestras", str(args.muestras), "--cada", str(args.cada), "--fps", str(args.fps), "--mp4", str(mp4)]
-    proceso = subprocess.run(comando, capture_output=True, text=True, encoding="utf-8", errors="replace")
-    if proceso.returncode != 0 or not mp4.exists():
-        print(proceso.stdout[-3000:], proceso.stderr[-3000:], sep="\n", file=sys.stderr)
-        raise ValueError("Blender no terminó el render (ver el mensaje de arriba)")
-    print(f"    listo ({time.perf_counter() - t1:.0f} s)")
+    vox = voxelizar(vertidas, args.dx)
+    print(f"\nGrilla de trabajo: dx = {args.dx:g} m, {vox.forma[0]} x {vox.forma[1]} x {vox.forma[2]} celdas, "
+          f"{np.count_nonzero(vox.vertida_id)} con hormigón, superposiciones = {vox.superposiciones}")
+    print(f"{'vertida':>11} {'id':>3} {'celdas':>9} {'V vóxeles':>11} {'V IFC':>9} {'error':>8}")
+    for i in range(1, vox.n_vertidas + 1):
+        print(f"{vox.nombres[i - 1]:>11} {i:3d} {vox.celdas(i):9d} {vox.volumen_voxel(i):11.3f} "
+              f"{vox.volumen_ifc[i - 1]:9.3f} {100 * vox.error_volumen(i):+7.2f}%")
 
-    print("3/3 Armando el GIF...", flush=True)
-    gif = crear_gif(cuadros, salida / "bloque_3d.gif", ancho=args.gif_ancho, fps=args.fps, cada=args.gif_cada)
-    print(f"\nVideo: {mp4}\nGIF:   {gif}\nCuadros PNG: {cuadros}")
+    c = caras(vox.vertida_id)
+    a = args.dx**2
+    print("\nSuperficies (cara de celda con hormigón de un lado y vacío del otro = exterior):")
+    print(f"  base (−z, contacto con el suelo): {c['exterior']['-z'] * a:8.2f} m²  "
+          f"(octágono de 18 m: {area_planta_octagono(18.0):.2f} m²)")
+    print(f"  arriba (+z, al aire):             {c['exterior']['+z'] * a:8.2f} m²  (incluye los escalones de los troncos)")
+    print(f"  laterales (±x, ±y, al aire):      {sum(c['exterior'][k] for k in ('-x', '+x', '-y', '+y')) * a:8.2f} m²")
+    print("  interfaces entre vertidas (juntas, conducción sin condición de borde):")
+    for (p, q), n in sorted(c["interfaz"].items()):
+        print(f"    {vox.nombres[p - 1]} – {vox.nombres[q - 1]}: {n * a:8.2f} m²")
+
+    plan = PlanVertidas(vox)
+    print("\nActivación temporal (Inicio_h y TemperaturaColocacion_C del pset UANDES_HormigonMasivo):")
+    print(f"{'t [h]':>6} {'se coloca':>11} {'T col.':>7} {'activas':>16} {'V activo [m³]':>14} {'cara superior expuesta [m²]':>28}")
+    for t_h, v, nombre, T_col, _ in plan.eventos():
+        activas = plan.celdas_activas(t_h)
+        expuesta = caras(vox.vertida_id, activas)["exterior"]["+z"] * a
+        print(f"{t_h:6.1f} {nombre:>11} {T_col:7.1f} {str(plan.vertidas_activas(t_h)):>16} "
+              f"{np.count_nonzero(activas) * args.dx**3:14.2f} {expuesta:28.2f}")
+
+    if not args.sin_figuras:
+        from pathlib import Path
+
+        from .graficos import graficar_error_volumen, graficar_voxelizacion
+
+        salida = Path(args.salida)
+        salida.mkdir(parents=True, exist_ok=True)
+        graficar_voxelizacion(vox, salida / "voxelizacion.png")
+        graficar_error_volumen(estudio, salida / "voxelizacion_error_volumen.png")
+        print(f"\nFiguras: {salida / 'voxelizacion.png'}, {salida / 'voxelizacion_error_volumen.png'}")
     return 0
 
 
@@ -598,19 +623,14 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--salida", default="resultados/bloque_3d")
     s.set_defaults(func=cmd_bloque)
 
-    s = sub.add_parser("bloque-3d", help="Animación 3D (Blender) de los cuatro casos del bloque: MP4 y GIF")
-    s.add_argument("--dx", type=float, default=0.05, help="celda de la simulación [m]")
-    s.add_argument("--beta", type=float, help="Robin: β = h/k [1/m] (por defecto h = 27,8 W/(m²K))")
-    s.add_argument("--res", type=int, nargs=2, default=[1280, 720], metavar=("ANCHO", "ALTO"))
-    s.add_argument("--muestras", type=int, default=32, help="muestras de EEVEE por cuadro (calidad)")
-    s.add_argument("--cada", type=int, default=1, help="renderiza 1 de cada N instantes (1 instante = 1 h)")
-    s.add_argument("--fps", type=int, default=15)
-    s.add_argument("--gif-ancho", type=int, default=720)
-    s.add_argument("--gif-cada", type=int, default=2, help="el GIF usa 1 de cada N cuadros (más liviano)")
-    s.add_argument("--blender", help="ruta a blender.exe (por defecto la busca)")
-    s.add_argument("--solo-datos", action="store_true", help="sólo simula y guarda datos.npz (sin Blender)")
-    s.add_argument("--salida", default="resultados/bloque_3d_render")
-    s.set_defaults(func=cmd_bloque_3d)
+    s = sub.add_parser("voxelizar", help="Voxeliza el IFC: vertida_id por celda, volúmenes, superficies, activación")
+    s.add_argument("ruta", nargs="?", default="geometry/foundation.ifc")
+    s.add_argument("--dx", type=float, default=0.05, help="celda de la grilla de trabajo [m]")
+    s.add_argument("--estudio", type=float, nargs="+", default=[0.5, 0.25, 0.2, 0.1, 0.05],
+                   help="tamaños de celda para el estudio de error de volumen [m]")
+    s.add_argument("--sin-figuras", action="store_true")
+    s.add_argument("--salida", default="resultados/voxelizacion")
+    s.set_defaults(func=cmd_voxelizar)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

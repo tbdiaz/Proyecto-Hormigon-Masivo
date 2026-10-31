@@ -43,8 +43,8 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 ## Uso rápido
 
 ```powershell
-pytest                                            # 107 tests automatizados (batería 1D/2D/3D), ~1 min
-pytest -m "not lento"                             # la batería rápida (103 tests, ~20 s)
+pytest                                            # 114 tests automatizados (batería 1D/2D/3D, voxelización), ~1 min
+pytest -m "not lento"                             # la batería rápida (110 tests, ~30 s)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
@@ -53,7 +53,7 @@ mcplan rectangulo                                 # ejercicio de la pizarra: 4×
 mcplan rectangulo --hidratacion                   # el mismo rectángulo con calor de hidratación (Tmax, ΔT)
 mcplan rectangulo --hidratacion pulso             # con el pulso de la clase Q = Qmax/2·(1 − cos 2πt/T), solución exacta
 mcplan bloque                                     # bloque 3×3×0,6 m con el pulso: Dirichlet 20/30 °C, Neumann y Robin
-mcplan bloque-3d                                  # animación 3D de los 4 casos con Blender + EEVEE (MP4 y GIF, ~6 min)
+mcplan voxelizar                                  # voxeliza el IFC: vertida_id, volumen vs dx, superficies, activación
 mcplan simular1d config/caso_base_1d.yaml         # columna del eje escrita a mano: métricas + gráficos en resultados/
 mcplan simular1d config/caso_ifc_1d.yaml          # la misma columna, leída desde el IFC
 mcplan malla config/caso_base_1d.yaml             # sensibilidad de Tmax y ΔT al tamaño de celda
@@ -92,8 +92,6 @@ Dossier de verificación y BIM base (E06): [`docs/dossier_verificacion.md`](docs
 
 Detalle en la [sección 7 de `docs/solver_nd.md`](docs/solver_nd.md).
 
-![Evolución del rectángulo con hidratación](docs/img/rectangulo_hidratacion_evolucion.gif)
-
 **Bloque 3D** (`mcplan bloque`): 3 × 3 × 0,6 m de hormigón a 20 °C con el pulso de la clase y cuatro bordes.
 Los cuatro casos tienen solución exacta (modos cos(μs/l) con μ·tan μ = Bi), y el error es menor que 0,25 °C con
 orden 2.
@@ -107,8 +105,6 @@ orden 2.
 
 Mismo bloque y mismo calor: el borde decide. Detalle en la
 [sección 8 de `docs/solver_nd.md`](docs/solver_nd.md).
-
-![Bloque 3D: los cuatro bordes](docs/img/bloque_evolucion.gif)
 
 ## Modelo BIM de la fundación
 
@@ -187,7 +183,7 @@ git restore geometry/foundation.ifc           # volver al modelo del repositorio
 ```
 config/              casos YAML (decisiones y parámetros) y sitio del grupo
 geometry/            modelo IFC (Bonsai) y geometría oficial del curso (JSON)
-scripts/             modelado y capturas en Blender + Bonsai, render 3D del bloque (sin interfaz)
+scripts/             modelado y capturas en Blender + Bonsai (sin interfaz), figuras del dossier
 src/mcplan/
   solver1d.py        balance de energía por celda, Euler explícito, bordes Dirichlet/Neumann/Robin
   solver_nd.py       el mismo balance en 2D/3D: vóxeles, dos materiales, fuente, hidratación, Δt crítico real
@@ -199,7 +195,7 @@ src/mcplan/
   verificacion_nd.py casos exactos 2D/3D: sinusoidal, fuente uniforme, energía adiabática
   rectangulo.py      ejercicio de la pizarra: rectángulo con borde Dirichlet, solución exacta, T(t) en puntos
   bloque.py          ejercicio de la pizarra: bloque 3D con el pulso y 4 bordes, solución exacta por modos
-  animacion3d.py     datos para la animación 3D del bloque (superficies con un cuarto cortado, colores)
+  voxelizacion.py    IFC -> grilla: pertenencia por paridad, vertida_id, volumen, superficies, activación
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
@@ -212,10 +208,15 @@ docs/                modelo 1D (modelo_1d.md), solver 2D/3D y batería E05 (solv
 Bonsai / Blender  →  IFC  →  IfcOpenShell  →  geometría + propiedades  →  voxelización  →  solver
 ```
 
-El solver no depende de Blender: sólo lee el archivo `.ifc`. En esta versión la "voxelización" es
-una columna vertical: un rayo en (x, y) que corta los triángulos de cada vertida
-(`columna_desde_ifc`). En el eje atraviesa las 5 vertidas (4,30 m); cerca del borde, en x = 8,5 m,
-sólo 1,30 m.
+El solver no depende de Blender: sólo lee el archivo `.ifc`.
+
+- **Voxelización 3D** (`voxelizacion.py`, `mcplan voxelizar`): cada celda recibe el `vertida_id` de la vertida que
+  contiene su centro, decidido por la paridad de los cruces de un rayo vertical con la malla del IFC. Con dx = 0,05 m
+  el error de volumen es de 0,02 % por vertida. Además identifica las superficies exteriores y las juntas entre
+  vertidas, y la estructura `PlanVertidas` activa cada vertida en su `Inicio_h` con su temperatura de colocación.
+  Diseño y respuestas para E07 en [`docs/modelo_vertidas.md`](docs/modelo_vertidas.md).
+- **Columna 1D** (`columna_desde_ifc`): el mismo rayo en un solo (x, y). En el eje atraviesa las 5 vertidas (4,30 m);
+  cerca del borde, en x = 8,5 m, sólo 1,30 m.
 
 ## Estado actual
 
@@ -225,11 +226,12 @@ sólo 1,30 m.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios del rectángulo y del bloque) | ✅ 107 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización) | ✅ 114 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
-| Activación temporal de vertidas (`Inicio_h`) | ⏳ pendiente |
+| Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
+| Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |
+| Solver 3D sobre la grilla voxelizada con activación (celdas inactivas, Robin en caras expuestas) | ⏳ siguiente paso |
 | Clima real (Open-Meteo, snapshots) | ⏳ pendiente: hoy el ambiente es una sinusoide ilustrativa |
-| Voxelización de la fundación + clima en 3D | ⏳ pendiente |
 | Monte Carlo / HPC / PyVista | ⏳ pendiente |
 
 ## Supuestos vigentes

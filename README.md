@@ -43,7 +43,7 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 ## Uso rápido
 
 ```powershell
-pytest                                            # 114 tests automatizados (batería 1D/2D/3D, voxelización), ~1 min
+pytest                                            # 119 tests automatizados (batería 1D/2D/3D, voxelización, solver 3D), ~1 min
 pytest -m "not lento"                             # la batería rápida (110 tests, ~30 s)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
@@ -54,6 +54,8 @@ mcplan rectangulo --hidratacion                   # el mismo rectángulo con cal
 mcplan rectangulo --hidratacion pulso             # con el pulso de la clase Q = Qmax/2·(1 − cos 2πt/T), solución exacta
 mcplan bloque                                     # bloque 3×3×0,6 m con el pulso: Dirichlet 20/30 °C, Neumann y Robin
 mcplan voxelizar                                  # voxeliza el IFC: vertida_id, volumen vs dx, superficies, activación
+mcplan simular3d                                  # fundación 3D por vertidas con hidratación (config/caso_3d.yaml)
+mcplan simular3d --dx 0.5 --inicio 2=12 --T-colocacion todas=10 --ocultar 5   # la secuencia es un input
 mcplan simular1d config/caso_base_1d.yaml         # columna del eje escrita a mano: métricas + gráficos en resultados/
 mcplan simular1d config/caso_ifc_1d.yaml          # la misma columna, leída desde el IFC
 mcplan malla config/caso_base_1d.yaml             # sensibilidad de Tmax y ΔT al tamaño de celda
@@ -196,10 +198,12 @@ src/mcplan/
   rectangulo.py      ejercicio de la pizarra: rectángulo con borde Dirichlet, solución exacta, T(t) en puntos
   bloque.py          ejercicio de la pizarra: bloque 3D con el pulso y 4 bordes, solución exacta por modos
   voxelizacion.py    IFC -> grilla: pertenencia por paridad, vertida_id, volumen, superficies, activación
+  simulacion3d.py    fundación 3D por etapas: suelo + vertidas que aparecen en su Inicio_h, Robin, hidratación
+  vista3d.py         vista 3D con un cuarto cortado (PNG) y HTML interactivo (ocultar/mostrar vertidas)
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
-docs/                modelo 1D (modelo_1d.md), solver 2D/3D y batería E05 (solver_nd.md), capturas del BIM
+docs/                modelo 1D, solver 2D/3D (E05), dossier (E06), vertidas (E07), pipeline 3D (E08), línea base (E09)
 ```
 
 ## Arquitectura
@@ -215,6 +219,11 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
   el error de volumen es de 0,02 % por vertida. Además identifica las superficies exteriores y las juntas entre
   vertidas, y la estructura `PlanVertidas` activa cada vertida en su `Inicio_h` con su temperatura de colocación.
   Diseño y respuestas para E07 en [`docs/modelo_vertidas.md`](docs/modelo_vertidas.md).
+- **Simulación 3D por vertidas** (`simulacion3d.py`, `mcplan simular3d`): suelo bajo la base, cada vertida aparece en
+  su `Inicio_h` a su temperatura de colocación, Robin en toda cara expuesta (también la cara superior de la última
+  vertida colocada) e hidratación con edad equivalente por celda. La secuencia viene del IFC y se puede cambiar en el
+  YAML o la línea de comandos. Pipeline y guion de la demo E08 en [`docs/simulacion_3d.md`](docs/simulacion_3d.md);
+  línea base E09 en [`docs/baseline_3d.md`](docs/baseline_3d.md).
 - **Columna 1D** (`columna_desde_ifc`): el mismo rayo en un solo (x, y). En el eje atraviesa las 5 vertidas (4,30 m);
   cerca del borde, en x = 8,5 m, sólo 1,30 m.
 
@@ -226,11 +235,12 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización) | ✅ 114 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D) | ✅ 119 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |
-| Solver 3D sobre la grilla voxelizada con activación (celdas inactivas, Robin en caras expuestas) | ⏳ siguiente paso |
+| Solver 3D sobre la grilla voxelizada con activación, suelo e hidratación (`mcplan simular3d`) | ✅ igual a `solver_nd` en una caja y en dos etapas |
+| Línea base 3D de la fundación (E09) | ✅ [docs/baseline_3d.md](docs/baseline_3d.md) |
 | Clima real (Open-Meteo, snapshots) | ⏳ pendiente: hoy el ambiente es una sinusoide ilustrativa |
 | Monte Carlo / HPC / PyVista | ⏳ pendiente |
 
@@ -243,7 +253,8 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Temperatura ambiente sinusoidal | media 16 °C, amplitud 7 °C | `config/*.yaml` — se reemplaza con Open-Meteo |
 | Suelo modelado / temperatura | 5 m, 15 °C | `config/*.yaml` |
 | Propiedades térmicas y curva adiabática | Ju y Lei (2019) Tabla 2, ec. (2)-(3) | `config/*.yaml`, `hidratacion.py` |
-| Todas las vertidas presentes desde t = 0 | simplificación de la versión 1D | `caso.py` |
+| Todas las vertidas presentes desde t = 0 | sólo en el caso 1D; el 3D activa cada vertida en su `Inicio_h` | `caso.py` |
+| Caras laterales con el mismo h que el aire (sin moldaje), sin sol | 27,8 W/(m²K) | `config/caso_3d.yaml` |
 
 ## Referencias
 

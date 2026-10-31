@@ -467,3 +467,121 @@ def graficar_todo(res: Resultado, met: MetricasTermicas, carpeta) -> list[Path]:
     graficar_perfiles(res, rutas[1])
     graficar_mapa(res, rutas[2])
     return rutas
+
+
+# ---------------------------------------------------------------------------
+# Fundación 3D por vertidas (simulacion3d.py)
+# ---------------------------------------------------------------------------
+
+_COLORES_VERTIDA = ["#d9984d", "#4d8ccc", "#73b866", "#d16b73", "#9478c7", "#8c8c8c"]
+
+
+def _marcar_colocaciones(ax, res):
+    for t, v, nombre, _ in res.eventos:
+        ax.axvline(t, color=_COLORES_VERTIDA[(v - 1) % 6], lw=0.8, ls=":", alpha=0.9)
+
+
+def graficar_tmax_3d(res, ruta, limite_Tmax=70.0, limite_dT=20.0, referencia=None):
+    """Tmax(t) global y por vertida, T ambiente y ΔT(t); `referencia` = (t, Tmax, dT, etiqueta) de otra corrida."""
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(10, 7.5), sharex=True, gridspec_kw={"height_ratios": [1.6, 1]})
+    t = res.t_h
+    ax.plot(t, res.Tmax, "k-", lw=2.2, label="Tmax del hormigón")
+    for v in range(res.Tmax_vertida.shape[1]):
+        ax.plot(t, res.Tmax_vertida[:, v], "-", lw=1, color=_COLORES_VERTIDA[v % 6],
+                label=f"Tmax {res.dominio.vox.nombres[v]}")
+    if referencia is not None:
+        ax.plot(referencia[0], referencia[1], "k--", lw=1.4, alpha=0.6, label=f"Tmax {referencia[3]}")
+        ax2.plot(referencia[0], referencia[2], "--", color="tab:red", lw=1.2, alpha=0.6, label=f"ΔT {referencia[3]}")
+    ax.plot(t, res.T_amb, color="tab:cyan", lw=0.8, label="T ambiente")
+    ax.axhline(limite_Tmax, color="tab:red", lw=1, ls="--", label=f"límite {limite_Tmax:g} °C")
+    _marcar_colocaciones(ax, res)
+    i = int(np.nanargmax(res.Tmax))
+    ax.annotate(f"{res.Tmax[i]:.1f} °C a las {t[i]:.0f} h", (t[i], res.Tmax[i]),
+                xytext=(-110 if t[i] > 0.8 * t[-1] else 10, 8),
+                textcoords="offset points", fontsize=9)
+    ax.set_ylabel("T [°C]")
+    ax.set_title("Temperatura máxima (las líneas punteadas marcan la colocación de cada vertida)", fontsize=10)
+    ax.legend(fontsize=7.5, ncol=3, loc="lower right")
+    ax.grid(alpha=0.3)
+    ax2.plot(t, res.dT, color="tab:red", lw=1.8, label="ΔT = Tmax − Tmin(superficie)")
+    ax2.axhline(limite_dT, color="tab:red", lw=1, ls="--", label=f"límite {limite_dT:g} °C")
+    _marcar_colocaciones(ax2, res)
+    ax2.set_xlabel("t [h]")
+    ax2.set_ylabel("ΔT [°C]")
+    ax2.legend(fontsize=8)
+    ax2.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)
+
+
+def graficar_puntos_3d(res, ruta):
+    fig, ax = plt.subplots(figsize=(10, 5))
+    for nombre, T in res.puntos.items():
+        x, y, z = res.posiciones[nombre]
+        ax.plot(res.t_h, T, lw=1.5, label=f"{nombre} ({x:.2f}, {y:.2f}, {z:.2f})")
+    ax.plot(res.t_h, res.T_amb, color="tab:cyan", lw=0.8, label="T ambiente")
+    _marcar_colocaciones(ax, res)
+    ax.set_xlabel("t [h]")
+    ax.set_ylabel("T [°C]")
+    ax.set_title("Temperatura en puntos relevantes (una curva empieza cuando se coloca su vertida)", fontsize=10)
+    ax.legend(fontsize=8, ncol=2)
+    ax.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)
+
+
+def graficar_cortes_3d(res, ruta, instantes_h=None):
+    """Corte vertical y = 0 en varios instantes: se ve crecer la fundación y el núcleo calentarse."""
+    dom = res.dominio
+    instantes_h = instantes_h or sorted(res.campos)
+    x, z = dom.centros(0), dom.centros(2)
+    ext = (x[0] - dom.dx / 2, x[-1] + dom.dx / 2, z[0] - dom.dx / 2, z[-1] + dom.dx / 2)
+    n = len(instantes_h)
+    columnas = 2
+    filas = (n + columnas - 1) // columnas
+    fig, ejes = plt.subplots(filas, columnas, figsize=(13, 2.3 * filas + 0.8), squeeze=False, layout="constrained")
+    vmax = float(np.nanmax(res.Tmax))
+    for c, t_h in enumerate(instantes_h):
+        ax = ejes[c // columnas][c % columnas]
+        i = int(np.argmin(np.abs(res.t_h - t_h)))
+        im = ax.imshow(res.corte_y0[i].T, origin="lower", extent=ext, cmap="inferno", vmin=10, vmax=vmax,
+                       aspect="auto", interpolation="nearest")
+        ax.axhline(0, color="0.5", lw=0.6)
+        ax.set_title(f"t = {res.t_h[i]:g} h: vertidas {res.plan.vertidas_activas(res.t_h[i])}", fontsize=9)
+        ax.set_ylim(min(ext[2], -1.5), 4.6)
+        ax.set_xlim(-11, 11)
+        ax.tick_params(labelsize=7)
+    for c in range(n, filas * columnas):
+        ejes[c // columnas][c % columnas].axis("off")
+    fig.colorbar(im, ax=ejes, shrink=0.8, label="T [°C]")
+    fig.suptitle("Corte vertical y = 0 (x horizontal, z vertical; bajo z = 0 está el suelo)", fontsize=11)
+    fig.savefig(ruta, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
+def graficar_plantas_3d(res, ruta, t_h=None):
+    """Cortes horizontales a media altura de cada vertida, en el instante de la Tmax (o el guardado más cercano)."""
+    dom = res.dominio
+    if t_h is None:
+        t_h = float(res.t_h[int(np.nanargmax(res.Tmax))])
+    t = min(res.campos, key=lambda a: abs(a - t_h))
+    campo = res.campos[t]
+    x, y, z = (dom.centros(e) for e in range(3))
+    ext = (x[0] - dom.dx / 2, x[-1] + dom.dx / 2, y[0] - dom.dx / 2, y[-1] + dom.dx / 2)
+    nv = dom.vox.n_vertidas
+    fig, ejes = plt.subplots(1, nv, figsize=(3.2 * nv, 3.6), layout="constrained")
+    vmax = float(np.nanmax(res.Tmax))
+    for v, ax in enumerate(np.atleast_1d(ejes), start=1):
+        capas = np.nonzero(np.any(dom.vertida_id == v, axis=(0, 1)))[0]
+        k = int(capas[len(capas) // 2])
+        im = ax.imshow(campo[:, :, k].T, origin="lower", extent=ext, cmap="inferno", vmin=10, vmax=vmax)
+        ax.set_title(f"{dom.vox.nombres[v - 1]}: z = {z[k]:.2f} m", fontsize=9)
+        ax.set_xlim(-10, 10)
+        ax.set_ylim(-10, 10)
+        ax.tick_params(labelsize=7)
+    fig.colorbar(im, ax=ejes, shrink=0.8, label="T [°C]")
+    fig.suptitle(f"Plantas a media altura de cada vertida, t = {t:g} h", fontsize=11)
+    fig.savefig(ruta, dpi=150, bbox_inches="tight")
+    plt.close(fig)

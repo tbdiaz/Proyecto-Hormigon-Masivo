@@ -10,6 +10,8 @@
                       [--hidratacion [ju-lei|pulso]] [--Qmax 1800] [--T-calor 42]
     mcplan bloque     [--L 3 3 0.6] [--dx 0.05] [--casos dirichlet neumann robin] [--T-dirichlet 20 30] [--beta 12.5]
     mcplan voxelizar  [geometry/foundation.ifc] [--dx 0.05] [--estudio 0.5 0.25 0.1 0.05]
+    mcplan simular3d  [config/caso_3d.yaml] [--dx 0.275] [--duracion 336] [--inicio 2=12] [--T-colocacion 3=10]
+                      [--ocultar 5] [--estudio-volumen 0.5 0.275 0.11] [--comparar-con resultados/.../serie.csv]
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -482,6 +484,186 @@ def cmd_voxelizar(args):
     return 0
 
 
+def _pares(valores, nombre):
+    """"2=12" -> {"2": 12.0}; la clave "todas" aplica a todas las vertidas."""
+    pares = {}
+    for v in valores or []:
+        if "=" not in v:
+            raise ValueError(f"{nombre} espera VERTIDA=VALOR (por ejemplo 2=12), no {v!r}")
+        clave, valor = v.split("=", 1)
+        pares[clave.strip()] = float(valor)
+    return pares
+
+
+def _cambios_cli(args, n_vertidas):
+    """Cambios de la línea de comandos a la secuencia: se suman a los del YAML (y mandan sobre ellos)."""
+    cambios = {}
+
+    def poner(clave, campo, valor):
+        destinos = range(1, n_vertidas + 1) if clave == "todas" else [int(clave)]
+        for v in destinos:
+            cambios.setdefault(f"Vertida_{v:02d}", {})[campo] = valor
+
+    for clave, valor in _pares(args.inicio, "--inicio").items():
+        poner(clave, "Inicio_h", valor)
+    for clave, valor in _pares(args.T_colocacion, "--T-colocacion").items():
+        poner(clave, "TemperaturaColocacion_C", valor)
+    for v in args.ocultar or []:
+        poner(str(v), "activa", False)
+    for v in args.mostrar or []:
+        poner(str(v), "activa", True)
+    return cambios
+
+
+def _leer_serie_csv(ruta):
+    import csv
+
+    with open(ruta, encoding="utf-8") as f:
+        filas = list(csv.DictReader(f))
+
+    def col(c):
+        return [float(r[c]) for r in filas]
+
+    return col("t_h"), col("Tmax_C"), col("dT_C")
+
+
+def cmd_simular3d(args):
+    import csv
+    from pathlib import Path
+
+    import numpy as np
+
+    from .ifc_io import leer_vertidas
+    from .simulacion3d import HORMIGON, SUELO, cargar_caso_3d, preparar, simular_3d
+    from .voxelizacion import voxelizar
+
+    caso = cargar_caso_3d(args.caso)
+    if args.dx is not None:
+        caso.dx = args.dx
+    if args.duracion is not None:
+        caso.duracion_h = args.duracion
+        caso.instantes_3d_h = [t for t in caso.instantes_3d_h if t <= args.duracion] or [args.duracion]
+    if args.dt_max is not None:
+        caso.dt_max_s = args.dt_max
+    if args.salida:
+        caso.salida = Path(args.salida)
+
+    t0 = time.perf_counter()
+    vertidas = leer_vertidas(caso.ifc)
+    print(f"[1] IFC: {caso.ifc}  ({len(vertidas)} vertidas leídas con IfcOpenShell)")
+    for clave, valores in _cambios_cli(args, len(vertidas)).items():
+        caso.cambios[clave] = {**(caso.cambios.get(clave) or {}), **valores}
+
+    if args.estudio_volumen:
+        print("\n    Error de volumen según dx:")
+        print(f"    {'dx [m]':>7} " + " ".join(f"{v.nombre:>11}" for v in vertidas) + f" {'total':>8}")
+        for dx in sorted(args.estudio_volumen, reverse=True):
+            v = voxelizar(vertidas, dx)
+            print(f"    {dx:7.3f} " + " ".join(f"{100 * v.error_volumen(i):+10.2f}%" for i in range(1, v.n_vertidas + 1))
+                  + f" {100 * v.error_volumen_total:+7.2f}%")
+
+    vox, dom, plan, registro = preparar(caso, vertidas)
+    n_h = np.count_nonzero(vox.vertida_id)
+    print(f"\n[2] Voxelización con dx = {caso.dx:g} m (centro del vóxel dentro del sólido, paridad de un rayo vertical):")
+    print(f"    {'vertida':>11} {'celdas':>9} {'V vóxeles':>10} {'V IFC':>9} {'error':>8}")
+    for i in range(1, vox.n_vertidas + 1):
+        print(f"    {vox.nombres[i - 1]:>11} {vox.celdas(i):9d} {vox.volumen_voxel(i):10.2f} "
+              f"{vox.volumen_ifc[i - 1]:9.2f} {100 * vox.error_volumen(i):+7.2f}%")
+    print(f"    {'total':>11} {n_h:9d} {n_h * caso.dx**3:10.2f} {sum(vox.volumen_ifc):9.2f} "
+          f"{100 * vox.error_volumen_total:+7.2f}%")
+    print(f"    Dominio con suelo ({caso.profundidad_suelo:g} m de profundidad, {caso.margen_suelo:g} m de margen) y aire: "
+          f"{dom.forma[0]} x {dom.forma[1]} x {dom.forma[2]} = {int(np.prod(dom.forma)):,} celdas "
+          f"({np.count_nonzero(dom.material == HORMIGON):,} hormigón, {np.count_nonzero(dom.material == SUELO):,} suelo)")
+
+    print("\n[3] Secuencia constructiva (input: pset del IFC" + (" + cambios del YAML/CLI" if registro else "") + "):")
+    for r in registro:
+        print(f"    cambio: {r}")
+    print(f"    {'vertida':>11} {'Inicio_h':>9} {'T col. [°C]':>12}  estado")
+    for i in range(1, vox.n_vertidas + 1):
+        ini = plan.inicio_h[i - 1]
+        estado = "OCULTA (no se construye)" if not np.isfinite(ini) else (
+            "fuera del horizonte" if ini > caso.duracion_h else "se coloca")
+        print(f"    {vox.nombres[i - 1]:>11} {ini:9.1f} {plan.T_colocacion[i - 1]:12.1f}  {estado}")
+
+    print(f"\n[4] Simulación 3D: {caso.duracion_h:g} h, dt <= min(0,9 dt_crítico, {caso.dt_max_s:g} s), hidratación Ju y Lei "
+          f"con edad equivalente, h = {caso.ambiente.h_superior:g}/{caso.ambiente.h_lateral:g} W/m²K (sup./lat.)")
+    t1 = time.perf_counter()
+    res = simular_3d(
+        dom, plan, caso.hormigon, caso.suelo, caso.hidratacion, caso.ambiente, caso.duracion_h,
+        T_suelo_inicial=caso.T_suelo_inicial, guardar_cada_h=caso.guardar_cada_h, dt_max_s=caso.dt_max_s,
+        factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
+        informar=lambda m: print("    " + m),
+    )
+    t_calculo = time.perf_counter() - t1
+    print(f"    ({t_calculo:.1f} s de cálculo, dt = {res.dts[-1][1]:.0f} s)")
+
+    i = int(np.nanargmax(res.Tmax))
+    j = int(np.nanargmax(res.dT))
+    print("\n[5] Resultados:")
+    print(f"    Tmax  = {res.Tmax[i]:.1f} °C a las {res.t_h[i]:.0f} h en ({', '.join(f'{c:.2f}' for c in res.Tmax_pos[i])}) m"
+          f"  -> {'cumple' if res.Tmax[i] <= caso.limite_Tmax else 'NO cumple'} {caso.limite_Tmax:g} °C")
+    print(f"    ΔTmax = {res.dT[j]:.1f} °C a las {res.t_h[j]:.0f} h (Tmax − Tmin de las celdas de superficie)"
+          f"  -> {'cumple' if res.dT[j] <= caso.limite_dT else 'NO cumple'} {caso.limite_dT:g} °C")
+    for v in range(vox.n_vertidas):
+        col = res.Tmax_vertida[:, v]
+        if np.isfinite(col).any():
+            k = int(np.nanargmax(col))
+            print(f"    {vox.nombres[v]}: Tmax {col[k]:.1f} °C a las {res.t_h[k]:.0f} h")
+    for nombre, T in res.puntos.items():
+        if np.isfinite(T).any():
+            k = int(np.nanargmax(T))
+            print(f"    punto {nombre:>20}: máx {T[k]:.1f} °C a las {res.t_h[k]:.0f} h, final {T[-1]:.1f} °C")
+        else:
+            print(f"    punto {nombre:>20}: sin material que exista (aire o vertida oculta)")
+
+    salida = caso.salida
+    salida.mkdir(parents=True, exist_ok=True)
+    columnas = (["t_h", "Tmax_C", "dT_C", "T_amb_C"] + [f"Tmax_{n}" for n in vox.nombres]
+                + [f"T_{n}" for n in res.puntos])
+    with open(salida / "serie.csv", "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(columnas)
+        for k in range(len(res.t_h)):
+            w.writerow([f"{res.t_h[k]:g}", f"{res.Tmax[k]:.3f}", f"{res.dT[k]:.3f}", f"{res.T_amb[k]:.3f}"]
+                       + [f"{x:.3f}" for x in res.Tmax_vertida[k]] + [f"{res.puntos[n][k]:.3f}" for n in res.puntos])
+    resumen = {
+        "caso": str(args.caso), "dx_m": caso.dx, "duracion_h": caso.duracion_h, "cambios": registro,
+        "error_volumen": {n: vox.error_volumen(k + 1) for k, n in enumerate(vox.nombres)},
+        "error_volumen_total": vox.error_volumen_total,
+        "secuencia": [{"vertida": n, "Inicio_h": float(plan.inicio_h[k]) if np.isfinite(plan.inicio_h[k]) else None,
+                       "T_colocacion_C": float(plan.T_colocacion[k])} for k, n in enumerate(vox.nombres)],
+        "Tmax_C": float(res.Tmax[i]), "t_Tmax_h": float(res.t_h[i]), "posicion_Tmax_m": res.Tmax_pos[i].tolist(),
+        "dTmax_C": float(res.dT[j]), "t_dTmax_h": float(res.t_h[j]),
+        "Tmax_vertida_C": {n: (float(np.nanmax(res.Tmax_vertida[:, k])) if np.isfinite(res.Tmax_vertida[:, k]).any()
+                               else None) for k, n in enumerate(vox.nombres)},
+        "dt_s": [{"desde_h": a, "dt_s": b, "dt_critico_s": float(c)} for a, b, c in res.dts],
+        "celdas": int(np.prod(dom.forma)), "tiempo_calculo_s": t_calculo,
+    }
+    (salida / "resumen.json").write_text(json.dumps(resumen, indent=2, ensure_ascii=False), encoding="utf-8")
+    archivos = ["serie.csv", "resumen.json"]
+
+    if not args.sin_figuras:
+        from .graficos import graficar_cortes_3d, graficar_plantas_3d, graficar_puntos_3d, graficar_tmax_3d
+        from .vista3d import exportar_html_3d, graficar_vista_3d
+
+        referencia = None
+        if args.comparar_con:
+            t_r, T_r, dT_r = _leer_serie_csv(args.comparar_con)
+            referencia = (t_r, T_r, dT_r, Path(args.comparar_con).parent.name)
+        graficar_tmax_3d(res, salida / "tmax.png", caso.limite_Tmax, caso.limite_dT, referencia)
+        graficar_puntos_3d(res, salida / "puntos.png")
+        graficar_cortes_3d(res, salida / "cortes_y0.png")
+        graficar_plantas_3d(res, salida / "plantas.png")
+        t_vista = sorted({min(res.campos, key=lambda a: abs(a - 12)), float(res.t_h[i])})
+        graficar_vista_3d(res, t_vista, salida / "vista_3d.png", dx_vista=args.dx_vista)
+        archivos += ["tmax.png", "puntos.png", "cortes_y0.png", "plantas.png", "vista_3d.png"]
+        if not args.sin_html:
+            exportar_html_3d(res, salida / "fundacion_3d.html", dx_vista=args.dx_vista)
+            archivos.append("fundacion_3d.html (abrir en el navegador)")
+    print(f"\nArchivos en {salida}: " + ", ".join(archivos) + f"   [total {time.perf_counter() - t0:.0f} s]")
+    return 0
+
+
 def cmd_ifc_crear(args):
     from .ifc_io import crear_modelo_base
 
@@ -631,6 +813,24 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--sin-figuras", action="store_true")
     s.add_argument("--salida", default="resultados/voxelizacion")
     s.set_defaults(func=cmd_voxelizar)
+
+    s = sub.add_parser("simular3d", help="Fundación 3D por vertidas: IFC -> vóxeles -> solver con hidratación")
+    s.add_argument("caso", nargs="?", default="config/caso_3d.yaml", help="archivo YAML del caso")
+    s.add_argument("--dx", type=float, help="sobrescribe el tamaño de celda [m]")
+    s.add_argument("--duracion", type=float, help="horas a simular")
+    s.add_argument("--dt-max", type=float, help="tope de dt por precisión [s]")
+    s.add_argument("--inicio", nargs="+", metavar="V=H", help="hora de inicio de una vertida, p. ej. 2=12 (o todas=0)")
+    s.add_argument("--T-colocacion", dest="T_colocacion", nargs="+", metavar="V=T",
+                   help="temperatura de colocación, p. ej. 3=10 o todas=25")
+    s.add_argument("--ocultar", type=int, nargs="+", metavar="V", help="vertidas que no se construyen")
+    s.add_argument("--mostrar", type=int, nargs="+", metavar="V", help="vuelve a construir una vertida oculta en el YAML")
+    s.add_argument("--estudio-volumen", type=float, nargs="+", metavar="DX", help="tabla de error de volumen para estos dx")
+    s.add_argument("--comparar-con", help="serie.csv de otra corrida para superponer en tmax.png")
+    s.add_argument("--dx-vista", type=float, default=0.5, help="tamaño de celda de la vista 3D [m]")
+    s.add_argument("--salida", help="carpeta de resultados (por defecto la del YAML)")
+    s.add_argument("--sin-figuras", action="store_true")
+    s.add_argument("--sin-html", action="store_true")
+    s.set_defaults(func=cmd_simular3d)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

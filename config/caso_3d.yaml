@@ -1,0 +1,81 @@
+# Caso de referencia 3D: fundación completa del IFC, construida por vertidas.
+#
+# Pipeline:  geometry/foundation.ifc -> voxelización (dx) -> suelo + aire -> solver 3D por etapas
+#
+# La SECUENCIA CONSTRUCTIVA es un input, no está en el solver:
+#   1) Inicio_h y TemperaturaColocacion_C de cada vertida vienen del pset UANDES_HormigonMasivo del IFC;
+#   2) la sección `vertidas` de este archivo los puede sobrescribir (o ocultar una vertida);
+#   3) la línea de comandos los puede sobrescribir otra vez (mcplan simular3d --inicio 2=12 ...).
+#
+# Unidades SI: m, s, W, J, kg, °C.  [JL19] = Ju y Lei (2019).  [SUPUESTO] = simplificación declarada.
+
+nombre: caso_3d
+
+ifc: ../geometry/foundation.ifc
+
+malla:
+  dx: 0.275         # m. Divide las juntas 0,55 / 1,10 / 2,20 / 3,30 m: error de volumen <= 1,8 % por vertida
+                    # salvo el pedestal (+8 %). Para la línea base E09 se usa dx = 0,11 (todas <= 1,1 %).
+
+materiales:
+  hormigon:
+    k: 2.222        # W/(m K)   [JL19]
+    rho: 2400       # kg/m3     [JL19]
+    cp: 970         # J/(kg K)  [JL19]
+    hidratacion:
+      modelo: ju_lei_2019
+      Eh_R: 2400    # K         [JL19, ec. 3]
+      T_ref_C: 20   # °C        [JL19, ec. 3]
+  suelo:
+    k: 1.389        # [JL19]
+    rho: 1800       # [JL19]
+    cp: 1273        # [JL19]
+
+suelo:
+  profundidad: 3.0  # m bajo la base [SUPUESTO]: en 14 días el calor penetra ~0,9 m
+  margen: 2.0       # m de suelo alrededor de la planta [SUPUESTO]
+  T_inicial: 15.0   # °C [SUPUESTO] uniforme
+  T_fondo: 15.0     # °C [SUPUESTO] Dirichlet en la cara inferior; caras laterales adiabáticas
+
+# Condiciones ambientales SIMPLIFICADAS (todavía no es el clima real de Litueche):
+ambiente:
+  h_superior: 27.8  # W/(m2 K) caras horizontales expuestas, hormigón-aire [JL19]
+  h_lateral: 27.8   # W/(m2 K) caras verticales [SUPUESTO]: moldaje no modelado (igual al aire)
+  T_amb:            # [SUPUESTO] sinusoide ilustrativa, la misma del caso 1D
+    tipo: sinusoidal
+    media: 16.0
+    amplitud: 7.0
+    hora_max: 15
+  # Sin radiación solar, sin viento variable, sin manta de aislación, sin retiro de moldaje.
+
+# Cambios a la secuencia del IFC (vacío = se usa el IFC tal cual: 0/6/12/18/24 h y 18 °C).
+# Ejemplos:
+#   Vertida_02: {Inicio_h: 12}
+#   Vertida_03: {TemperaturaColocacion_C: 10}
+#   Vertida_05: {activa: false}
+vertidas: {}
+
+tiempo:
+  duracion_h: 336   # 14 días
+  hora_inicio: 8    # hora del día en que se coloca la Vertida_01 (t = 0)
+  factor_seguridad: 0.9
+  dt_max_s: 600     # por precisión (Euler, 1er orden): con 600 s Tmax difiere ~0,2 °C de dt = 150 s
+  guardar_cada_h: 1.0
+
+# Puntos donde se registra T(t): centro de la celda que contiene (x, y, z).
+puntos:
+  nucleo_eje:        [0.0, 0.0, 2.15]   # mitad de los 4,30 m del eje
+  base_eje:          [0.0, 0.0, 0.10]   # cerca del contacto con el suelo
+  techo_V1_eje:      [0.0, 0.0, 0.45]   # superficie superior de V1 hasta que llega V2
+  superficie_pedestal: [0.0, 0.0, 4.25] # 5 cm bajo la cara superior del pedestal
+  borde_mitad:       [8.5, 0.0, 0.65]   # cerca del borde, mitad de 1,30 m de hormigón
+  tronco_V4:         [4.5, 0.0, 2.70]   # dentro de la Vertida_04, ~0,5 m bajo la cara inclinada
+  suelo_bajo_eje:    [0.0, 0.0, -0.50]
+
+salida:
+  carpeta: ../resultados/caso_3d
+  instantes_3d_h: [6, 12, 24, 48, 72, 120, 168, 336]   # campos 3D completos para cortes y vista 3D
+
+criterios:
+  Tmax_C: 70
+  dT_C: 20

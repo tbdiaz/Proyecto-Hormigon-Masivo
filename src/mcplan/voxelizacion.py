@@ -214,7 +214,9 @@ class PlanVertidas:
 
     @property
     def inicio_h(self) -> np.ndarray:
-        return np.array([float(p.get("Inicio_h", 0.0)) for p in self.vox.propiedades])
+        """Inicio_h de cada vertida; infinito si está oculta ("activa": False, ver simulacion3d.aplicar_cambios)."""
+        return np.array([float(p.get("Inicio_h", 0.0)) if p.get("activa", True) else np.inf
+                         for p in self.vox.propiedades])
 
     @property
     def T_colocacion(self) -> np.ndarray:

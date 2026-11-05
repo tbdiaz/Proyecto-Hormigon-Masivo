@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel térmico 3D</title>
+<style>
+:root {
+  color-scheme: light;
+  --fondo: #f4f4f2; --tarjeta: #fcfcfb; --linea: #dddcd7; --grilla: #e9e8e4;
+  --texto: #0b0b0b; --texto2: #52514e; --texto3: #76756f; --acento: #2a78d6;
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --mal: #b3261e; --bien: #1b7f4b; --fondo-mal: #fbeaea; --fondo-bien: #e6f4ec;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --fondo: #111110; --tarjeta: #1a1a19; --linea: #34332f; --grilla: #2a2a27;
+    --texto: #f0efec; --texto2: #c3c2b7; --texto3: #9a998f; --acento: #3987e5;
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --mal: #f28b82; --bien: #6fcf97; --fondo-mal: #3a1f1d; --fondo-bien: #16301f;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fondo); color: var(--texto);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
+main { max-width: 1500px; margin: 0 auto; padding: 20px 20px 48px; display: grid; gap: 14px; }
+h1 { font-size: 21px; margin: 0; font-weight: 650; }
+h2 { font-size: 14px; margin: 0; font-weight: 650; }
+.sub { color: var(--texto2); }
+.nota { color: var(--texto3); font-size: 12.5px; margin: 8px 0 0; }
+.tarjeta { background: var(--tarjeta); border: 1px solid var(--linea); border-radius: 8px; padding: 14px; min-width: 0; }
+.fila { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.espacio { justify-content: space-between; }
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; }
+.kpi .etq { color: var(--texto2); font-size: 12.5px; }
+.kpi .val { font-size: 25px; font-weight: 650; line-height: 1.25; }
+.kpi .det { color: var(--texto3); font-size: 12.5px; }
+.estado { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 7px; border-radius: 10px; margin-left: 4px; vertical-align: 2px; }
+.estado.mal { color: var(--mal); background: var(--fondo-mal); }
+.estado.bien { color: var(--bien); background: var(--fondo-bien); }
+.tiempo { position: sticky; top: 0; z-index: 5; }
+.tiempo input[type=range] { flex: 1 1 280px; min-width: 180px; }
+.lectura { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 6px; color: var(--texto2); }
+.lectura b { color: var(--texto); font-weight: 650; }
+button, select { font: inherit; color: var(--texto); background: var(--tarjeta); border: 1px solid var(--linea); border-radius: 6px; padding: 4px 10px; min-height: 30px; }
+button { cursor: pointer; }
+button:hover, select:hover { border-color: var(--texto3); }
+button[aria-pressed=true] { background: var(--acento); border-color: var(--acento); color: #fff; }
+:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+label.check { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.vistas { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr); gap: 14px; }
+canvas { display: block; width: 100%; touch-action: none; }
+#c3d { height: 430px; cursor: grab; }
+#c3d:active { cursor: grabbing; }
+#corte { height: 340px; cursor: crosshair; }
+.escala { display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--texto2); margin-top: 8px; }
+.escala canvas { flex: 1; height: 10px; border-radius: 2px; min-width: 60px; }
+.pos { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.pos input { flex: 1; min-width: 80px; }
+#lecturaCorte { min-height: 21px; margin-top: 6px; }
+svg { display: block; width: 100%; }
+.leyenda { display: flex; flex-wrap: wrap; gap: 4px 6px; margin: 8px 0; }
+.leyenda button { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; min-height: 26px; padding: 2px 8px; }
+.leyenda button[aria-pressed=false] { opacity: .45; }
+.leyenda button[aria-pressed=true] { background: transparent; color: var(--texto); border-color: var(--linea); }
+.clave { width: 14px; height: 2px; display: inline-block; }
+#tip { position: fixed; pointer-events: none; display: none; z-index: 10; background: var(--tarjeta); border: 1px solid var(--linea); border-radius: 6px; padding: 7px 10px; font-size: 12.5px; box-shadow: 0 2px 10px rgba(0,0,0,.18); }
+#tip div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
+#tip b { font-weight: 650; min-width: 44px; }
+#tip span { color: var(--texto2); }
+.datos { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.ancho { grid-column: 1 / -1; }
+.tabla { overflow-x: auto; margin-top: 8px; }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: var(--texto2); border-bottom: 1px solid var(--linea); padding: 5px 8px; white-space: nowrap; }
+td { border-bottom: 1px solid var(--grilla); padding: 5px 8px; }
+td.n, th.n { text-align: right; white-space: nowrap; }
+tr:last-child td { border-bottom: 0; }
+.destacada { font-weight: 650; }
+.pares { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-top: 10px; }
+.pares div span { display: block; color: var(--texto2); font-size: 12.5px; }
+.pares div b { font-size: 17px; font-weight: 650; }
+code { font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; }
+pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radius: 6px; overflow-x: auto; }
+@media (max-width: 1000px) { .vistas { grid-template-columns: minmax(0, 1fr); } .datos { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 500px) { main { padding: 12px 16px 32px; } #c3d { height: 320px; } }
+</style>
+</head>
+<body>
+<main>
+  <header class="fila espacio">
+    <div>
+      <h1>Panel térmico de la fundación 3D</h1>
+      <div class="sub" id="subtitulo"></div>
+    </div>
+  </header>
+
+  <section class="kpis" id="kpis" aria-label="Resumen"></section>
+
+  <section class="tarjeta tiempo" aria-label="Tiempo">
+    <div class="fila">
+      <button id="play" type="button">▶ Reproducir</button>
+      <input id="tiempo" type="range" min="0" step="1" aria-label="Instante de la simulación">
+      <b id="tTexto"></b>
+    </div>
+    <div class="lectura" id="lectura"></div>
+  </section>
+
+  <section class="vistas">
+    <div class="tarjeta">
+      <div class="fila espacio">
+        <h2>Vista 3D</h2>
+        <div class="fila">
+          <label class="check"><input type="checkbox" id="cortar" checked> Cortar un cuarto</label>
+          <label class="check">Escala z <select id="escalaZ"><option value="1">1×</option><option value="2" selected>2×</option></select></label>
+          <button id="reset" type="button">Reiniciar vista</button>
+        </div>
+      </div>
+      <canvas id="c3d" role="img" aria-label="Vista 3D de la fundación coloreada por temperatura. Arrastra para girar y usa la rueda para acercar."></canvas>
+      <div class="fila" id="togglesV" style="margin-top:6px"></div>
+      <p class="nota">Arrastra para girar y usa la rueda para acercar. Las casillas sólo ocultan la vertida en esta vista; para no construirla en el cálculo usa <code>--ocultar</code>.</p>
+    </div>
+    <div class="tarjeta">
+      <div class="fila espacio">
+        <h2>Corte</h2>
+        <div class="fila" id="planos" role="group" aria-label="Plano de corte"></div>
+      </div>
+      <canvas id="corte" role="img" aria-label="Corte de la fundación coloreado por temperatura. Pasa el puntero para leer la temperatura."></canvas>
+      <div class="pos"><span id="posTexto" style="min-width:90px"></span><input id="pos" type="range" min="0" step="1" aria-label="Posición del corte"></div>
+      <div id="lecturaCorte" class="sub">Pasa el puntero sobre el corte para leer la temperatura.</div>
+      <div class="escala"><span id="escMin"></span><canvas id="barra" height="10"></canvas><span id="escMax"></span></div>
+      <p class="nota" id="notaMuestreo"></p>
+    </div>
+  </section>
+
+  <section class="tarjeta">
+    <div class="fila espacio">
+      <h2>Curvas de temperatura</h2>
+      <div class="fila" id="vistasCurvas" role="group" aria-label="Curvas a mostrar"></div>
+    </div>
+    <div class="leyenda" id="leyenda"></div>
+    <svg id="grafico" role="img" aria-label="Temperatura en función del tiempo"></svg>
+    <p class="nota">Las líneas punteadas verticales marcan cada colocación. Haz clic en el gráfico para llevar la vista a ese instante.</p>
+  </section>
+
+  <section class="datos">
+    <div class="tarjeta">
+      <h2>Discretización</h2>
+      <div class="pares" id="discretizacion"></div>
+      <p class="nota">Volúmenes finitos con celdas cúbicas y Euler explícito. Δt<sub>crít</sub> = mín C<sub>i</sub>/ΣG<sub>i</sub>; se usa Δt ≤ mín(seguridad·Δt<sub>crít</sub>, Δt<sub>máx</sub>).</p>
+    </div>
+    <div class="tarjeta">
+      <h2>Materiales e hidratación</h2>
+      <div class="tabla" id="tablaMateriales"></div>
+      <p class="nota" id="notaHidratacion"></p>
+    </div>
+    <div class="tarjeta ancho">
+      <h2>Condiciones de borde</h2>
+      <div class="tabla" id="tablaBordes"></div>
+      <p class="nota">β = h/k [1/m]. Neumann adiabático: β = 0. Dirichlet: β → ∞. h<sub>ef</sub> es lo que usa la celda: h en serie con media celda de hormigón o suelo, 1/(1/h + Δx/2k); en Dirichlet, 2k/Δx. Entre hormigón y suelo, y en las juntas entre vertidas, no hay borde: hay conducción con la media armónica de k. Las áreas son las de la malla al final de la corrida; en los troncos, la escalera sobrestima el área real expuesta.</p>
+    </div>
+    <div class="tarjeta ancho">
+      <h2>Vertidas: secuencia y error de volumen</h2>
+      <div class="tabla" id="tablaVertidas"></div>
+      <div id="cambios"></div>
+    </div>
+    <div class="tarjeta">
+      <h2>Etapas de colocación</h2>
+      <div class="tabla" id="tablaEtapas"></div>
+    </div>
+    <div class="tarjeta">
+      <h2>Puntos de control</h2>
+      <div class="tabla" id="tablaPuntos"></div>
+    </div>
+    <div class="tarjeta ancho">
+      <h2>Comando de esta corrida</h2>
+      <pre><code id="comando"></code></pre>
+    </div>
+  </section>
+</main>
+<div id="tip" role="status"></div>
+
+<script type="application/json" id="datos">__DATOS_PANEL__</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById("datos").textContent);
+const $ = id => document.getElementById(id);
+const fmt = (x, d = 1) => x === null || x === undefined || !isFinite(x) ? "—" : x.toLocaleString("es-CL", { minimumFractionDigits: d, maximumFractionDigits: d });
+const entero = x => x.toLocaleString("es-CL");
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+function el(tag, props = {}, ...hijos) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) k === "class" ? e.className = v : k in e ? e[k] = v : e.setAttribute(k, v);
+  e.append(...hijos);
+  return e;
+}
+function tabla(destino, cols, filas) {
+  const t = el("table");
+  t.append(el("thead", {}, el("tr", {}, ...cols.map(c => el("th", { class: c.n ? "n" : "", scope: "col" }, c.t)))));
+  const b = el("tbody");
+  for (const f of filas) b.append(el("tr", {}, ...cols.map(c => el("td", { class: c.n ? "n" : "" }, c.v(f)))));
+  t.append(b);
+  destino.replaceChildren(t);
+}
+
+// ---------- Escala de color (inferno) ----------
+const PARADAS = [[0,0,4],[31,12,72],[85,15,109],[136,34,106],[186,54,85],[227,89,51],[249,140,10],[249,201,50],[252,255,164]];
+const LUT = new Uint8ClampedArray(256 * 3);
+for (let i = 0; i < 256; i++) {
+  const p = i / 255 * (PARADAS.length - 1), a = Math.min(Math.floor(p), PARADAS.length - 2), f = p - a;
+  for (let c = 0; c < 3; c++) LUT[i * 3 + c] = PARADAS[a][c] + (PARADAS[a + 1][c] - PARADAS[a][c]) * f;
+}
+const vMin = 10, vMax = Math.max(40, Math.ceil(D.resultado.Tmax));
+const indiceColor = T => Math.max(0, Math.min(255, Math.round((T - vMin) / (vMax - vMin) * 255)));
+const SOMBRA = [0.72, 0.72, 0.86, 0.86, 1, 1];  // luz simple por orientación de la cara (±x, ±y, ±z)
+const COLORES = Array.from({ length: 6 }, (_, d) => Array.from({ length: 256 }, (_, i) =>
+  `rgb(${LUT[i*3] * SOMBRA[d] | 0},${LUT[i*3+1] * SOMBRA[d] | 0},${LUT[i*3+2] * SOMBRA[d] | 0})`));
+
+// ---------- Datos 3D ----------
+const V = D.vista, [NX, NY, NZ] = V.forma, NCEL = NX * NY * NZ, NFR = V.tiempos.length;
+const idx = (i, j, k) => (i * NY + j) * NZ + k;
+const centro = (e, i) => V.origen[e] + (i + 0.5) * V.d;
+let VID, CAMPOS;
+async function descomprimir(b64) {
+  const crudo = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  return new Response(new Blob([crudo]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+}
+const est = { fr: 0, plano: "xz", pos: { xz: 0, yz: 0, xy: 0 }, cortar: true, zs: 2, yaw: -0.85, pitch: 0.55, zoom: 1, vis: D.vertidas.map(() => true), curvas: "global", ocultas: new Set() };
+const valor = (fr, c) => CAMPOS[fr * NCEL + c];
+const indiceSerie = t => { let m = 0, dm = Infinity; D.series.t.forEach((x, i) => { const d = Math.abs(x - t); if (d < dm) { dm = d; m = i; } }); return m; };
+const tActual = () => V.tiempos[est.fr];
+
+// ---------- Vista 3D: caras visibles, ordenadas por profundidad ----------
+const DIRS = [[-1,0,0],[1,0,0],[0,-1,0],[0,1,0],[0,0,-1],[0,0,1]];
+let caras = null;
+function construirCaras() {
+  const fr = est.fr, xs = [], colores = [], dirs = [];
+  const mostrar = (i, j, k) => {
+    if (i < 0 || j < 0 || k < 0 || i >= NX || j >= NY || k >= NZ) return false;
+    const c = idx(i, j, k), v = VID[c];
+    if (v <= 0 || !est.vis[v - 1] || valor(fr, c) === V.sin_dato) return false;
+    return !(est.cortar && centro(0, i) > 0 && centro(1, j) < 0);
+  };
+  for (let i = 0; i < NX; i++) for (let j = 0; j < NY; j++) for (let k = 0; k < NZ; k++) {
+    if (!mostrar(i, j, k)) continue;
+    const T = valor(fr, idx(i, j, k)) / V.escala;
+    for (let d = 0; d < 6; d++) {
+      const D3 = DIRS[d];
+      if (mostrar(i + D3[0], j + D3[1], k + D3[2])) continue;
+      xs.push(centro(0, i), centro(1, j), centro(2, k));
+      colores.push(indiceColor(T));
+      dirs.push(d);
+    }
+  }
+  caras = { x: Float32Array.from(xs), c: Uint8Array.from(colores), d: Uint8Array.from(dirs), n: dirs.length };
+}
+const c3d = $("c3d");
+function dimensionar(canvas) {
+  const r = canvas.getBoundingClientRect(), p = window.devicePixelRatio || 1;
+  const w = Math.max(1, Math.round(r.width * p)), h = Math.max(1, Math.round(r.height * p));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  return { w: r.width, h: r.height, p };
+}
+function dibujar3D() {
+  if (!caras) return;
+  const { w, h, p } = dimensionar(c3d), g = c3d.getContext("2d");
+  g.setTransform(p, 0, 0, p, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const cy = Math.cos(est.yaw), sy = Math.sin(est.yaw), cp = Math.cos(est.pitch), sp = Math.sin(est.pitch), zs = est.zs;
+  const esc = Math.min(w, h * 1.7) / 24 * est.zoom, ox = w / 2, oy = h * 0.56;
+  // Proyección ortográfica: (x, y, z) -> pantalla (u, v) y profundidad
+  const U = (x, y) => x * cy - y * sy;
+  const Y2 = (x, y) => x * sy + y * cy;
+  const zc = 2.15;
+  const vis = [];
+  const normalVista = DIRS.map(n => {
+    const y2 = Y2(n[0], n[1]);
+    return -y2 * cp + n[2] * sp * zs >= 0 || false;  // hacia la cámara
+  });
+  const prof = new Float32Array(caras.n);
+  for (let f = 0; f < caras.n; f++) {
+    if (!normalVista[caras.d[f]]) continue;
+    const x = caras.x[3*f], y = caras.x[3*f+1], z = (caras.x[3*f+2] - zc) * zs;
+    prof[f] = Y2(x, y) * cp - z * sp;
+    vis.push(f);
+  }
+  vis.sort((a, b) => prof[b] - prof[a]);
+  const m = V.d / 2;
+  g.lineWidth = 0.6;
+  for (const f of vis) {
+    const x = caras.x[3*f], y = caras.x[3*f+1], z = caras.x[3*f+2], d = caras.d[f], eje = d >> 1, s = d & 1 ? 1 : -1;
+    const P = [[-1,-1],[1,-1],[1,1],[-1,1]];
+    g.beginPath();
+    for (let q = 0; q < 4; q++) {
+      const a = [0, 0, 0];
+      a[eje] = s * m;
+      const [e1, e2] = eje === 0 ? [1, 2] : eje === 1 ? [0, 2] : [0, 1];
+      a[e1] = P[q][0] * m; a[e2] = P[q][1] * m;
+      const X = x + a[0], Y = y + a[1], Z = (z + a[2] - zc) * zs;
+      const su = ox + U(X, Y) * esc, sv = oy - (Y2(X, Y) * sp + Z * cp) * esc;
+      q ? g.lineTo(su, sv) : g.moveTo(su, sv);
+    }
+    g.closePath();
+    const col = COLORES[d][caras.c[f]];
+    g.fillStyle = col; g.strokeStyle = col;
+    g.fill(); g.stroke();
+  }
+  // Ejes
+  const O = [34, h - 34], L = 20, tinta = css("--texto2");
+  g.font = "11px system-ui"; g.fillStyle = tinta; g.strokeStyle = tinta; g.lineWidth = 1.2;
+  for (const [nom, dx, dy, dz] of [["x",1,0,0],["y",0,1,0],["z",0,0,1]]) {
+    const u = U(dx, dy) * L, v = -(Y2(dx, dy) * sp + dz * cp) * L;
+    g.beginPath(); g.moveTo(O[0], O[1]); g.lineTo(O[0] + u, O[1] + v); g.stroke();
+    g.fillText(nom, O[0] + u * 1.25 - 3, O[1] + v * 1.25 + 4);
+  }
+}
+let arrastre = null;
+c3d.addEventListener("pointerdown", e => { arrastre = [e.clientX, e.clientY]; c3d.setPointerCapture(e.pointerId); });
+c3d.addEventListener("pointermove", e => {
+  if (!arrastre) return;
+  est.yaw += (e.clientX - arrastre[0]) * 0.01;
+  est.pitch = Math.max(0.05, Math.min(1.5, est.pitch + (e.clientY - arrastre[1]) * 0.01));
+  arrastre = [e.clientX, e.clientY];
+  pedir(dibujar3D);
+});
+c3d.addEventListener("pointerup", () => arrastre = null);
+c3d.addEventListener("wheel", e => { e.preventDefault(); est.zoom = Math.max(0.5, Math.min(5, est.zoom * Math.exp(-e.deltaY * 0.001))); pedir(dibujar3D); }, { passive: false });
+const pendientes = new Set();
+function pedir(f) {
+  if (!pendientes.size) requestAnimationFrame(() => { const l = [...pendientes]; pendientes.clear(); l.forEach(x => x()); });
+  pendientes.add(f);
+}
+
+// ---------- Corte ----------
+const PLANOS = { xz: { u: 0, v: 2, fijo: 1, nombre: "Vertical y", etq: "y" }, yz: { u: 1, v: 2, fijo: 0, nombre: "Vertical x", etq: "x" }, xy: { u: 0, v: 1, fijo: 2, nombre: "Planta z", etq: "z" } };
+const celda = (pl, a, b, f) => { const ijk = [0, 0, 0]; ijk[pl.u] = a; ijk[pl.v] = b; ijk[pl.fijo] = f; return idx(...ijk); };
+let geomCorte = null;
+function dibujarCorte() {
+  const cv = $("corte"), { w, h, p } = dimensionar(cv), g = cv.getContext("2d"), pl = PLANOS[est.plano], f = est.pos[est.plano];
+  g.setTransform(p, 0, 0, p, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const nu = V.forma[pl.u], nv = V.forma[pl.v], d = V.d, mL = 40, mB = 30, mT = 8, mR = 8;
+  const px = Math.min((w - mL - mR) / (nu * d), (h - mB - mT) / (nv * d));
+  const ancho = nu * d * px, alto = nv * d * px, x0 = mL + (w - mL - mR - ancho) / 2, y0 = mT + (h - mB - mT - alto) / 2;
+  const fuera = document.createElement("canvas"); fuera.width = nu; fuera.height = nv;
+  const gf = fuera.getContext("2d"), img = gf.createImageData(nu, nv);
+  for (let a = 0; a < nu; a++) for (let b = 0; b < nv; b++) {
+    const c = celda(pl, a, b, f), t = valor(est.fr, c), o = ((nv - 1 - b) * nu + a) * 4;
+    if (t === V.sin_dato) {
+      if (VID[c] > 0) { img.data[o] = img.data[o+1] = img.data[o+2] = 128; img.data[o+3] = 55; }  // aún no colocada
+      continue;
+    }
+    const i = indiceColor(t / V.escala);
+    img.data[o] = LUT[i*3]; img.data[o+1] = LUT[i*3+1]; img.data[o+2] = LUT[i*3+2]; img.data[o+3] = 255;
+  }
+  gf.putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = false;
+  g.drawImage(fuera, x0, y0, ancho, alto);
+  // Juntas entre vertidas y contorno del hormigón
+  g.strokeStyle = "rgba(255,255,255,.55)"; g.lineWidth = 1; g.beginPath();
+  for (let a = 0; a < nu; a++) for (let b = 0; b < nv; b++) {
+    const v = VID[celda(pl, a, b, f)], X = x0 + a * d * px, Y = y0 + alto - b * d * px;
+    if (a + 1 < nu && v !== VID[celda(pl, a + 1, b, f)]) { g.moveTo(X + d * px, Y); g.lineTo(X + d * px, Y - d * px); }
+    if (b + 1 < nv && v !== VID[celda(pl, a, b + 1, f)]) { g.moveTo(X, Y - d * px); g.lineTo(X + d * px, Y - d * px); }
+  }
+  g.stroke();
+  // Ejes en metros
+  const tinta = css("--texto2"), o = V.origen;
+  g.fillStyle = tinta; g.strokeStyle = css("--linea"); g.font = "11px system-ui"; g.lineWidth = 1;
+  g.strokeRect(x0 + .5, y0 + .5, ancho - 1, alto - 1);
+  const paso = r => r > 14 ? 5 : r > 6 ? 2 : 1;
+  const ru = nu * d, rv = nv * d, pu = paso(ru), pv = paso(rv), ou = o[pl.u], ov = o[pl.v];
+  g.textAlign = "center"; g.textBaseline = "top";
+  for (let m = Math.ceil(ou / pu) * pu; m <= ou + ru; m += pu) g.fillText(m, x0 + (m - ou) * px, y0 + alto + 4);
+  g.textAlign = "right"; g.textBaseline = "middle";
+  for (let m = Math.ceil(ov / pv) * pv; m <= ov + rv; m += pv) g.fillText(m, x0 - 5, y0 + alto - (m - ov) * px);
+  const nom = ["x", "y", "z"];
+  g.textAlign = "center"; g.textBaseline = "bottom";
+  g.fillText(nom[pl.u] + " [m]", x0 + ancho / 2, Math.min(h, y0 + alto + 30));
+  g.save(); g.translate(10, y0 + alto / 2); g.rotate(-Math.PI / 2); g.textBaseline = "middle"; g.fillText(nom[pl.v] + " [m]", 0, 0); g.restore();
+  geomCorte = { x0, y0, ancho, alto, px, nu, nv, pl, f };
+  $("posTexto").textContent = `${pl.etq} = ${fmt(centro(pl.fijo, f), 2)} m`;
+}
+function leerCorte(e) {
+  if (!geomCorte) return;
+  const r = $("corte").getBoundingClientRect(), G = geomCorte;
+  const a = Math.floor((e.clientX - r.left - G.x0) / (V.d * G.px)), b = Math.floor((G.y0 + G.alto - (e.clientY - r.top)) / (V.d * G.px));
+  if (a < 0 || b < 0 || a >= G.nu || b >= G.nv) { $("lecturaCorte").textContent = "Pasa el puntero sobre el corte para leer la temperatura."; return; }
+  const c = celda(G.pl, a, b, G.f), t = valor(est.fr, c), v = VID[c], ijk = [0, 0, 0];
+  ijk[G.pl.u] = a; ijk[G.pl.v] = b; ijk[G.pl.fijo] = G.f;
+  const lugar = `(${ijk.map((n, e2) => fmt(centro(e2, n), 2)).join("; ")}) m`;
+  const nodo = $("lecturaCorte");
+  if (t === V.sin_dato) { nodo.textContent = `${lugar}: ${v > 0 ? D.vertidas[v - 1].nombre + ", aún no colocada" : "aire"}`; return; }
+  nodo.replaceChildren(el("b", {}, `${fmt(t / V.escala)} °C`), ` en ${lugar}: ${v > 0 ? D.vertidas[v - 1].nombre : "suelo"}`);
+}
+$("corte").addEventListener("pointermove", leerCorte);
+$("corte").addEventListener("pointerleave", () => $("lecturaCorte").textContent = "Pasa el puntero sobre el corte para leer la temperatura.");
+
+function ponerPlano(p) {
+  est.plano = p;
+  for (const b of $("planos").children) b.setAttribute("aria-pressed", b.dataset.p === p);
+  const pl = PLANOS[p];
+  $("pos").max = V.forma[pl.fijo] - 1;
+  $("pos").value = est.pos[p];
+  dibujarCorte();
+}
+
+// ---------- Curvas ----------
+const S = D.series;
+function seriesActuales() {
+  const color = n => `var(--s${n})`;
+  if (est.curvas === "global") return [
+    { id: "Tmax", n: "Tmax del hormigón", T: S.Tmax, c: color(1), a: 2.4 },
+    { id: "dT", n: "ΔT = Tmax − Tmin de superficie", T: S.dT, c: color(2) },
+    { id: "amb", n: "T ambiente", T: S.T_amb, c: "var(--texto3)", a: 1 },
+  ];
+  if (est.curvas === "vertidas") return D.vertidas.map((v, i) => ({ id: "v" + i, n: "Tmax " + v.nombre, T: S.vertidas[i], c: color(i + 1) }));
+  return S.puntos.map((p, i) => ({ id: "p" + i, n: p.nombre.replaceAll("_", " "), T: p.T, c: color(i % 8 + 1) }));
+}
+const NS = "http://www.w3.org/2000/svg";
+const sv = (tag, a = {}) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
+let geomCurvas = null;
+function dibujarCurvas() {
+  const svg = $("grafico"), W = Math.max(320, svg.getBoundingClientRect().width), H = 320, m = { l: 42, r: 14, t: 10, b: 34 };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H); svg.replaceChildren();
+  const series = seriesActuales(), vivas = series.filter(s => !est.ocultas.has(s.id));
+  const t = S.t, tMax = t[t.length - 1] || 1;
+  const X = x => m.l + x / tMax * (W - m.l - m.r);
+  let lo = 0, hi = 10;
+  for (const s of vivas) for (const v of s.T) if (v !== null) { lo = Math.min(lo, v); hi = Math.max(hi, v); }
+  if (est.curvas === "global") hi = Math.max(hi, D.limites.Tmax + 5);
+  hi = Math.ceil(hi / 10) * 10; lo = Math.floor(lo / 10) * 10;
+  const Y = y => H - m.b - (y - lo) / (hi - lo) * (H - m.t - m.b);
+  const tinta = "var(--texto3)";
+  for (let y = lo; y <= hi; y += 10) {
+    svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(y), y2: Y(y), stroke: "var(--grilla)" }));
+    const e = sv("text", { x: m.l - 6, y: Y(y) + 4, "text-anchor": "end", fill: tinta, "font-size": 11 }); e.textContent = y; svg.append(e);
+  }
+  const pasoT = tMax > 200 ? 48 : tMax > 72 ? 24 : tMax > 24 ? 12 : 6;
+  for (let x = 0; x <= tMax; x += pasoT) {
+    const e = sv("text", { x: X(x), y: H - m.b + 16, "text-anchor": "middle", fill: tinta, "font-size": 11 }); e.textContent = x; svg.append(e);
+  }
+  const ex = sv("text", { x: (m.l + W - m.r) / 2, y: H - 3, "text-anchor": "middle", fill: tinta, "font-size": 11 }); ex.textContent = "t [h]"; svg.append(ex);
+  const ey = sv("text", { x: 12, y: (m.t + H - m.b) / 2, "text-anchor": "middle", fill: tinta, "font-size": 11, transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` }); ey.textContent = "°C"; svg.append(ey);
+  for (const c of D.colocaciones) svg.append(sv("line", { x1: X(c.t), x2: X(c.t), y1: m.t, y2: H - m.b, stroke: "var(--texto3)", "stroke-dasharray": "1 3" }));
+  if (est.curvas === "global") for (const [val, nom] of [[D.limites.Tmax, `límite Tmax ${D.limites.Tmax} °C`], [D.limites.dT, `límite ΔT ${D.limites.dT} °C`]]) {
+    svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(val), y2: Y(val), stroke: "var(--texto2)", "stroke-dasharray": "5 4" }));
+    const e = sv("text", { x: W - m.r - 4, y: Y(val) - 4, "text-anchor": "end", fill: "var(--texto2)", "font-size": 11 }); e.textContent = nom; svg.append(e);
+  }
+  for (const s of vivas) {
+    let d = "", abierto = false;
+    s.T.forEach((v, i) => { if (v === null) { abierto = false; return; } d += `${abierto ? "L" : "M"}${X(t[i]).toFixed(1)} ${Y(v).toFixed(1)}`; abierto = true; });
+    svg.append(sv("path", { d, fill: "none", stroke: s.c, "stroke-width": s.a || 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+  }
+  const ahora = sv("line", { x1: X(tActual()), x2: X(tActual()), y1: m.t, y2: H - m.b, stroke: "var(--texto)", "stroke-width": 1.5 }); svg.append(ahora);
+  const cruz = sv("line", { y1: m.t, y2: H - m.b, stroke: "var(--texto2)", visibility: "hidden" }); svg.append(cruz);
+  geomCurvas = { X, W, m, tMax, vivas, cruz, ahora };
+}
+function ponerLeyenda() {
+  const l = $("leyenda"); l.replaceChildren();
+  for (const s of seriesActuales()) {
+    const b = el("button", { type: "button" }, el("span", { class: "clave", style: `background:${s.c}` }), s.n);
+    b.setAttribute("aria-pressed", !est.ocultas.has(s.id));
+    b.onclick = () => { est.ocultas.has(s.id) ? est.ocultas.delete(s.id) : est.ocultas.add(s.id); ponerLeyenda(); dibujarCurvas(); };
+    l.append(b);
+  }
+}
+const instante = e => {
+  const r = $("grafico").getBoundingClientRect(), G = geomCurvas, px = (e.clientX - r.left) * G.W / r.width;
+  return Math.max(0, Math.min(G.tMax, (px - G.m.l) / (G.W - G.m.l - G.m.r) * G.tMax));
+};
+$("grafico").addEventListener("pointermove", e => {
+  const G = geomCurvas, i = indiceSerie(instante(e)), x = S.t[i], tip = $("tip");
+  G.cruz.setAttribute("x1", G.X(x)); G.cruz.setAttribute("x2", G.X(x)); G.cruz.setAttribute("visibility", "visible");
+  const filas = [el("div", {}, el("span", {}, `t = ${fmt(x, 0)} h (día ${fmt(x / 24)})`))];
+  for (const s of G.vivas) filas.push(el("div", {}, el("i", { class: "clave", style: `background:${s.c}` }), el("b", {}, s.T[i] === null ? "—" : `${fmt(s.T[i])} °C`), el("span", {}, s.n)));
+  tip.replaceChildren(...filas); tip.style.display = "block";
+  const ax = tip.offsetWidth, sobra = e.clientX + 16 + ax > innerWidth;
+  tip.style.left = (sobra ? e.clientX - ax - 12 : e.clientX + 16) + "px";
+  tip.style.top = Math.max(8, Math.min(innerHeight - tip.offsetHeight - 8, e.clientY - 20)) + "px";
+});
+$("grafico").addEventListener("pointerleave", () => { $("tip").style.display = "none"; geomCurvas.cruz.setAttribute("visibility", "hidden"); });
+$("grafico").addEventListener("click", e => {
+  const t = instante(e); let m = 0, dm = Infinity;
+  V.tiempos.forEach((x, i) => { const d = Math.abs(x - t); if (d < dm) { dm = d; m = i; } });
+  ponerInstante(m);
+});
+
+// ---------- Tiempo ----------
+function activasEn(t) { return D.vertidas.filter(v => v.inicio_h !== null && v.inicio_h <= t + 1e-9).map(v => v.id); }
+function ponerInstante(fr) {
+  est.fr = fr; $("tiempo").value = fr;
+  const t = tActual(), i = indiceSerie(t), act = activasEn(t);
+  $("tTexto").textContent = `t = ${fmt(t, 0)} h · día ${fmt(t / 24)}`;
+  const item = (n, v) => el("span", {}, n + " ", el("b", {}, v));
+  $("lectura").replaceChildren(
+    item("Vertidas colocadas:", act.length ? act.join(", ") : "ninguna"),
+    item("Tmax:", `${fmt(S.Tmax[i])} °C`), item("ΔT:", `${fmt(S.dT[i])} °C`), item("T ambiente:", `${fmt(S.T_amb[i])} °C`));
+  for (const fila of document.querySelectorAll("[data-punto]")) fila.textContent = `${fmt(S.puntos[+fila.dataset.punto].T[i])} °C`;
+  if (geomCurvas) { geomCurvas.ahora.setAttribute("x1", geomCurvas.X(t)); geomCurvas.ahora.setAttribute("x2", geomCurvas.X(t)); }
+  construirCaras(); pedir(dibujar3D); pedir(dibujarCorte);
+}
+let reproduccion = null;
+$("play").onclick = () => {
+  if (reproduccion) { clearInterval(reproduccion); reproduccion = null; $("play").textContent = "▶ Reproducir"; return; }
+  $("play").textContent = "❚❚ Pausa";
+  reproduccion = setInterval(() => ponerInstante((est.fr + 1) % NFR), 350);
+};
+$("tiempo").addEventListener("input", e => ponerInstante(+e.target.value));
+
+// ---------- Contenido fijo ----------
+function contenido() {
+  const R = D.resultado, L = D.limites, M = D.malla, Tm = D.tiempo;
+  const horaCol = `${Tm.hora_inicio}:00`;
+  $("subtitulo").textContent = `Caso ${D.caso} · ${fmt(Tm.duracion_h, 0)} h simuladas · primera vertida a las ${horaCol}`;
+  const estado = ok => el("span", { class: "estado " + (ok ? "bien" : "mal") }, ok ? "✓ cumple" : "✕ no cumple");
+  const kpi = (e, v, det, st) => el("div", { class: "tarjeta kpi" }, el("div", { class: "etq" }, e), el("div", { class: "val" }, v, st || ""), el("div", { class: "det" }, det));
+  $("kpis").replaceChildren(
+    kpi("Temperatura máxima", `${fmt(R.Tmax)} °C`, `a las ${fmt(R.t_Tmax, 0)} h · límite ${L.Tmax} °C`, estado(R.Tmax <= L.Tmax)),
+    kpi("ΔT máximo", `${fmt(R.dT)} °C`, `a las ${fmt(R.t_dT, 0)} h · límite ${L.dT} °C`, estado(R.dT <= L.dT)),
+    kpi("Error de volumen total", `${fmt(M.error_total * 100, 2)} %`, "vóxeles contra IFC"),
+    kpi("Δx = Δy = Δz", `${fmt(M.dx, 3)} m`, `${entero(M.celdas)} celdas`),
+    kpi("Δt", `${fmt(Tm.dt, 0)} s`, `Δt crítico mínimo ${fmt(Math.min(...D.etapas.map(e => e.dt_critico)), 0)} s`));
+
+  const par = (e, v) => el("div", {}, el("span", {}, e), el("b", {}, v));
+  $("discretizacion").replaceChildren(
+    par("Δx", `${fmt(M.dx, 3)} m`), par("Δy", `${fmt(M.dy, 3)} m`), par("Δz", `${fmt(M.dz, 3)} m`),
+    par("Grilla", `${M.nx} × ${M.ny} × ${M.nz}`), par("Celdas de hormigón", entero(M.hormigon)), par("Celdas de suelo", entero(M.suelo)),
+    par("Δt usado", `${fmt(Tm.dt, 0)} s`), par("Δt máximo", Tm.dt_max === null ? "sin tope" : `${fmt(Tm.dt_max, 0)} s`), par("Factor de seguridad", fmt(Tm.seguridad, 2)));
+
+  tabla($("tablaBordes"), [
+    { t: "Superficie", v: f => f.superficie }, { t: "Tipo", v: f => f.tipo },
+    { t: "β = h/k [1/m]", n: 1, v: f => f.tipo === "Dirichlet" ? "∞" : fmt(f.beta, 2) },
+    { t: "h [W/m²K]", n: 1, v: f => f.h === null ? "—" : fmt(f.h, 1) }, { t: "k [W/mK]", n: 1, v: f => fmt(f.k, 3) },
+    { t: "h_ef [W/m²K]", n: 1, v: f => fmt(f.h_ef, 2) }, { t: "Temperatura o flujo", v: f => f.referencia }, { t: "Área [m²]", n: 1, v: f => fmt(f.area, 1) },
+  ], D.bordes);
+  tabla($("tablaMateriales"), [
+    { t: "Material", v: f => f.nombre }, { t: "k [W/mK]", n: 1, v: f => fmt(f.k, 3) }, { t: "ρ [kg/m³]", n: 1, v: f => fmt(f.rho, 0) },
+    { t: "c_p [J/kgK]", n: 1, v: f => fmt(f.cp, 0) }, { t: "α [m²/s]", n: 1, v: f => f.alpha.toExponential(2).replace(".", ",") },
+  ], D.materiales);
+  const H = D.hidratacion;
+  $("notaHidratacion").textContent = `Hidratación: curva adiabática de Ju y Lei (2019), con E_h/R = ${fmt(H.Eh_R, 0)} K y T_ref = ${fmt(H.T_ref, 0)} °C. Cada celda lleva su propia edad equivalente.`;
+  tabla($("tablaVertidas"), [
+    { t: "Vertida", v: f => f.nombre },
+    { t: "Inicio [h]", n: 1, v: f => f.inicio_h === null ? "oculta" : fmt(f.inicio_h) },
+    { t: "T colocación [°C]", n: 1, v: f => fmt(f.T_colocacion) }, { t: "Celdas", n: 1, v: f => entero(f.celdas) },
+    { t: "V vóxeles [m³]", n: 1, v: f => fmt(f.V_vox, 2) }, { t: "V IFC [m³]", n: 1, v: f => fmt(f.V_ifc, 2) },
+    { t: "Error", n: 1, v: f => `${f.error > 0 ? "+" : ""}${fmt(f.error * 100, 2)} %` },
+    { t: "Tmax [°C]", n: 1, v: f => fmt(f.Tmax) }, { t: "a las [h]", n: 1, v: f => fmt(f.t_Tmax, 0) },
+  ], D.vertidas);
+  if (D.cambios.length) $("cambios").append(el("p", { class: "nota" }, "Cambios respecto del IFC: " + D.cambios.join("; ")));
+  tabla($("tablaEtapas"), [
+    { t: "t [h]", n: 1, v: f => fmt(f.t) }, { t: "Vertidas", v: f => f.activas.join(", ") || "—" }, { t: "V activo [m³]", n: 1, v: f => fmt(f.V) },
+    { t: "Δt crítico [s]", n: 1, v: f => fmt(f.dt_critico, 0) }, { t: "Δt [s]", n: 1, v: f => fmt(f.dt, 0) },
+  ], D.etapas);
+  tabla($("tablaPuntos"), [
+    { t: "Punto", v: f => f.nombre.replaceAll("_", " ") }, { t: "(x; y; z) [m]", n: 1, v: f => f.pos.map(c => fmt(c, 2)).join("; ") },
+    { t: "T en t actual", n: 1, v: f => el("span", { "data-punto": S.puntos.indexOf(f) }) },
+  ], S.puntos);
+  $("comando").textContent = D.comando;
+  $("notaMuestreo").textContent = V.s > 1
+    ? `Las vistas muestran una celda de cada ${V.s} por eje (${fmt(V.d, 2)} m) para que el archivo sea liviano. Tmax, ΔT y las curvas salen de la malla completa (Δx = ${fmt(M.dx, 3)} m).`
+    : `Las vistas muestran la malla completa (Δx = ${fmt(M.dx, 3)} m).`;
+  $("escMin").textContent = `${vMin} °C`; $("escMax").textContent = `${vMax} °C`;
+  const b = $("barra"); b.width = 256; const gb = b.getContext("2d");
+  for (let i = 0; i < 256; i++) { gb.fillStyle = `rgb(${LUT[i*3]},${LUT[i*3+1]},${LUT[i*3+2]})`; gb.fillRect(i, 0, 1, 10); }
+
+  for (const [p, n] of [["xz", "y"], ["yz", "x"], ["xy", "Planta"]]) {
+    const bt = el("button", { type: "button" }, p === "xy" ? "Planta (z)" : `Vertical (${n} fijo)`);
+    bt.dataset.p = p; bt.onclick = () => ponerPlano(p); $("planos").append(bt);
+  }
+  D.vertidas.forEach((v, i) => {
+    const c = el("input", { type: "checkbox", checked: true });
+    c.onchange = () => { est.vis[i] = c.checked; construirCaras(); pedir(dibujar3D); };
+    $("togglesV").append(el("label", { class: "check" }, c, v.nombre));
+  });
+  for (const [id, n] of [["global", "Tmax y ΔT"], ["vertidas", "Por vertida"], ["puntos", "Puntos"]]) {
+    const bt = el("button", { type: "button" }, n); bt.dataset.c = id;
+    bt.setAttribute("aria-pressed", id === est.curvas);
+    bt.onclick = () => { est.curvas = id; for (const x of $("vistasCurvas").children) x.setAttribute("aria-pressed", x.dataset.c === id); ponerLeyenda(); dibujarCurvas(); };
+    $("vistasCurvas").append(bt);
+  }
+  $("cortar").onchange = e => { est.cortar = e.target.checked; construirCaras(); pedir(dibujar3D); };
+  $("escalaZ").onchange = e => { est.zs = +e.target.value; pedir(dibujar3D); };
+  $("reset").onclick = () => { est.yaw = -0.85; est.pitch = 0.55; est.zoom = 1; pedir(dibujar3D); };
+  $("pos").addEventListener("input", e => { est.pos[est.plano] = +e.target.value; dibujarCorte(); });
+  $("tiempo").max = NFR - 1;
+}
+
+(async function iniciar() {
+  try {
+    const [vid, T] = await Promise.all([descomprimir(V.vid), descomprimir(V.T)]);
+    VID = new Int8Array(vid); CAMPOS = new Int16Array(T);
+  } catch (error) {
+    document.querySelector("main").prepend(el("div", { class: "tarjeta" }, "Este navegador no pudo abrir los datos 3D. Abre el panel en una versión reciente de Chrome, Edge o Firefox."));
+    throw error;
+  }
+  contenido();
+  const medio = (eje, valor) => { let m = 0, dm = Infinity; for (let i = 0; i < V.forma[eje]; i++) { const d = Math.abs(centro(eje, i) - valor); if (d < dm) { dm = d; m = i; } } return m; };
+  est.pos = { xz: medio(1, 0), yz: medio(0, 0), xy: medio(2, 2.15) };
+  ponerPlano("xz");
+  ponerLeyenda();
+  let inicial = 0, dm = Infinity;
+  V.tiempos.forEach((x, i) => { const d = Math.abs(x - D.resultado.t_Tmax); if (d < dm) { dm = d; inicial = i; } });
+  ponerInstante(inicial);
+  dibujarCurvas();
+  new ResizeObserver(() => { pedir(dibujar3D); pedir(dibujarCorte); pedir(dibujarCurvas); }).observe(document.querySelector("main"));
+})();
+</script>
+</body>
+</html>

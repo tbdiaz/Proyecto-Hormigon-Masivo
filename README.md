@@ -43,7 +43,7 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 ## Uso rápido
 
 ```powershell
-pytest                                            # 119 tests automatizados (batería 1D/2D/3D, voxelización, solver 3D), ~1 min
+pytest                                            # 120 tests automatizados (batería 1D/2D/3D, voxelización, solver 3D), ~1 min
 pytest -m "not lento"                             # la batería rápida (110 tests, ~30 s)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
@@ -199,7 +199,8 @@ src/mcplan/
   bloque.py          ejercicio de la pizarra: bloque 3D con el pulso y 4 bordes, solución exacta por modos
   voxelizacion.py    IFC -> grilla: pertenencia por paridad, vertida_id, volumen, superficies, activación
   simulacion3d.py    fundación 3D por etapas: suelo + vertidas que aparecen en su Inicio_h, Robin, hidratación
-  vista3d.py         vista 3D con un cuarto cortado (PNG) y HTML interactivo (ocultar/mostrar vertidas)
+  vista3d.py         vista 3D con un cuarto cortado (PNG)
+  panel.py, panel.html  panel interactivo de cada corrida: Δx, Δt, β de los bordes, vista 3D, cortes y curvas
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
@@ -235,7 +236,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D) | ✅ 119 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D) | ✅ 120 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |

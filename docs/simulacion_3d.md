@@ -18,7 +18,7 @@ mcplan simular3d                      # caso del YAML: dx = 0,275 m, 14 días
 | 4. Dominio | se agrega suelo bajo z = 0 (3 m, 2 m de margen) y aire alrededor | `simulacion3d.construir_dominio` |
 | 5. Secuencia | `Inicio_h` y `TemperaturaColocacion_C` del IFC, con los cambios del YAML y de la línea de comandos | `aplicar_cambios`, `PlanVertidas` |
 | 6. Solver | volúmenes finitos + Euler explícito, por etapas entre colocaciones, con hidratación Ju y Lei | `simulacion3d.simular_3d` |
-| 7. Salidas | Tmax(t), ΔT(t), T en puntos, cortes, plantas, vista 3D (PNG y HTML interactivo), `serie.csv`, `resumen.json` | `graficos.py`, `vista3d.py` |
+| 7. Salidas | `panel.html` interactivo; Tmax(t), ΔT(t), T en puntos, cortes, plantas y vista 3D en PNG; `serie.csv`, `resumen.json` | `panel.py`, `graficos.py`, `vista3d.py` |
 
 ## 2. La secuencia está en los inputs, no en el solver
 
@@ -65,8 +65,9 @@ cambia el inicio y la temperatura de V2 y oculta V5 sin tocar el solver.
 |---|---|---|
 | Ejecutar el caso | `mcplan simular3d` | salida [1]…[5] y `resultados/caso_3d/` |
 | **Cambiar Δx** | `mcplan simular3d --dx 0.5 --duracion 72` (rápido) · `--dx 0.11` (fino) | tabla [2], celdas, Δt crítico |
+| **Ver todo en pantalla** | abrir `panel.html` en la carpeta de resultados | Δx, Δy, Δz, Δt, β de cada borde, vista 3D, cortes y curvas, sin internet |
 | **Reportar error de volumen** | sale siempre en [2]; para varios dx: `--estudio-volumen 0.5 0.275 0.2 0.11 0.1` | por vertida y total |
-| **Ocultar / mostrar una vertida** | `--ocultar 5`; o `Vertida_05: {activa: false}` en el YAML y `--mostrar 5` para volver | [3] dice "OCULTA"; en `fundacion_3d.html`, clic en la leyenda |
+| **Ocultar / mostrar una vertida** | `--ocultar 5`; o `Vertida_05: {activa: false}` en el YAML y `--mostrar 5` para volver | [3] dice "OCULTA"; en `panel.html`, las casillas bajo la vista 3D |
 | **Cambiar hora de inicio** | `--inicio 2=12` (o `todas=0`: vertida monolítica) | [3], líneas punteadas de `tmax.png` |
 | **Cambiar T de colocación** | `--T-colocacion todas=10` o `3=25` | `puntos.png`: la curva parte en esa T |
 | **Visualizar el efecto** | `--comparar-con resultados/caso_3d/serie.csv --salida resultados/demo` | `tmax.png` superpone la corrida base (línea discontinua) |

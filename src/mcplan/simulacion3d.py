@@ -194,6 +194,7 @@ class Resultado3D:
     campos: dict  # t_h -> campo 3D float32 (NaN donde no hay material) en los instantes elegidos y el de la Tmax
     edades: dict  # t_h -> te [h] (float32) en los mismos instantes
     dts: list = field(default_factory=list)  # (t_inicio_h, dt [s], dt_critico [s]) por tramo
+    etapas: list = field(default_factory=list)  # (t_h, vertidas colocadas, dt_critico [s]) al cambiar las celdas
     eventos: list = field(default_factory=list)
 
     @property
@@ -216,8 +217,12 @@ def simular_3d(
     puntos: dict | None = None,
     instantes_3d_h=(),
     informar=None,
+    observador=None,
 ) -> Resultado3D:
-    """Integra la fundación por etapas: entre eventos de colocación las celdas que existen no cambian."""
+    """Integra la fundación por etapas: entre eventos de colocación las celdas que existen no cambian.
+
+    observador(t_h, T, activas), si se indica, se llama en cada instante guardado (ver panel.Recolector).
+    """
     forma = dom.forma
     es_h = dom.material == HORMIGON
     es_s = dom.material == SUELO
@@ -243,7 +248,7 @@ def simular_3d(
 
     reg = {k_: [] for k_ in ("t", "Tmax", "pos", "Tmin", "Tmaxv", "Tmedv", "amb", "corte")}
     reg_p = {n: [] for n in puntos}
-    campos, edades, dts, eventos = {}, {}, [], []
+    campos, edades, dts, eventos, etapas = {}, {}, [], [], []
     mayor = {"T": -np.inf}
 
     def registrar(t_h):
@@ -266,6 +271,8 @@ def simular_3d(
         reg["corte"].append(np.where(activas[:, j0, :], T[:, j0, :], np.nan).astype(np.float32))
         for n, i in idx_puntos.items():
             reg_p[n].append(float(T[i]) if activas[i] else np.nan)
+        if observador:
+            observador(t_h, T, activas)
         guardar = any(abs(ti - t_h) < 1e-6 for ti in instantes_3d)
         if reg["Tmax"][-1] > mayor["T"]:  # el campo del instante de la Tmax también se guarda (al final)
             mayor.update(T=reg["Tmax"][-1], t=t_h, campo=np.where(activas, T, np.nan).astype(np.float32),
@@ -346,6 +353,7 @@ def simular_3d(
                 eventos.append((t_h, v, dom.vox.nombres[v - 1], float(plan.T_colocacion[v - 1])))
             etapa = _etapa(dom, activas, k, C, ambiente)
             expuesta = etapa.G_aire > 0
+            etapas.append((t_h, plan.vertidas_activas(t_h), float(etapa.dt_critico)))
             if informar:
                 informar(f"t = {t_h:6.1f} h: activas {plan.vertidas_activas(t_h)}, dt crítico = {etapa.dt_critico:.0f} s")
         t_prev = t_h
@@ -360,7 +368,7 @@ def simular_3d(
         dominio=dom, plan=plan, t_h=np.array(reg["t"]), Tmax=np.array(reg["Tmax"]), Tmax_pos=np.array(reg["pos"]),
         Tmin_sup=np.array(reg["Tmin"]), Tmax_vertida=np.array(reg["Tmaxv"]), Tmedia_vertida=np.array(reg["Tmedv"]),
         puntos={n: np.array(v) for n, v in reg_p.items()}, posiciones=posiciones, T_amb=np.array(reg["amb"]),
-        corte_y0=np.stack(reg["corte"]), campos=campos, edades=edades, dts=dts, eventos=eventos,
+        corte_y0=np.stack(reg["corte"]), campos=campos, edades=edades, dts=dts, eventos=eventos, etapas=etapas,
     )
 
 
@@ -391,6 +399,13 @@ class Caso3D:
     salida: object  # Path
     limite_Tmax: float = 70.0
     limite_dT: float = 20.0
+    T_amb_texto: str = ""  # cómo se declaró T ambiente en el YAML
+
+
+def _texto_T_amb(d) -> str:
+    if isinstance(d, (int, float)):
+        return f"T_amb = {d:g} °C"
+    return f"T_amb = {d['media']:g} ± {d['amplitud']:g} °C (sinusoide diaria, máx. a las {d['hora_max']:g} h)"
 
 
 def cargar_caso_3d(ruta) -> Caso3D:
@@ -436,6 +451,7 @@ def cargar_caso_3d(ruta) -> Caso3D:
         salida=Path(os.path.normpath(base / sal.get("carpeta", f"../resultados/{ruta.stem}"))),
         limite_Tmax=float(crit.get("Tmax_C", 70.0)),
         limite_dT=float(crit.get("dT_C", 20.0)),
+        T_amb_texto=_texto_T_amb(amb["T_amb"]),
     )
 
 

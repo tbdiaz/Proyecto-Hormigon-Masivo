@@ -1,16 +1,10 @@
 """Vista 3D de la fundación voxelizada: caras exteriores de las celdas coloreadas por temperatura.
 
-- `graficar_vista_3d`: figura PNG (Matplotlib) con un cuarto de la fundación cortado
-  (x > 0, y < 0) para ver el interior.
-- `exportar_html_3d`: página HTML interactiva (Plotly desde CDN, no requiere instalar
-  nada en Python): una traza por vertida, que se oculta o muestra con un clic en la
-  leyenda, y un deslizador con los instantes guardados.
+`graficar_vista_3d`: figura PNG (Matplotlib) con un cuarto de la fundación cortado
+(x > 0, y < 0) para ver el interior. La versión interactiva está en panel.py.
 
 Para que la vista sea liviana, la grilla se submuestrea a celdas de ~dx_vista.
 """
-
-import json
-from pathlib import Path
 
 import numpy as np
 
@@ -124,54 +118,3 @@ def graficar_vista_3d(res, instantes_h, ruta, dx_vista=0.5, vmin=None, vmax=None
     fig.suptitle("Fundación 3D con un cuarto cortado (x > 0, y < 0): temperatura en las caras visibles", fontsize=11)
     fig.savefig(ruta, dpi=140, bbox_inches="tight")
     plt.close(fig)
-
-
-def exportar_html_3d(res, ruta, dx_vista=0.5):
-    """HTML interactivo: una traza por vertida (clic en la leyenda = ocultar/mostrar) y un deslizador de tiempo."""
-    dom = res.dominio
-    nombres = dom.vox.nombres
-    vmax = float(np.nanmax(res.Tmax))
-    cuadros = []
-    for t in sorted(res.campos):
-        _, T, vid, mostrar, origen, d = _vista(res, t, dx_vista)
-        trazas = []
-        for v in range(1, len(nombres) + 1):
-            idx, ejes, signos = caras_visibles(mostrar & (vid == v))
-            q = _cuadrilateros(idx, ejes, signos, origen, d).reshape(-1, 3)
-            val = np.repeat(T[tuple(idx.T)], 4) if len(idx) else np.zeros(0)
-            base = np.arange(len(idx)) * 4
-            trazas.append({
-                "type": "mesh3d", "name": nombres[v - 1], "showlegend": True, "showscale": v == 1,
-                "x": np.round(q[:, 0], 3).tolist(), "y": np.round(q[:, 1], 3).tolist(),
-                "z": np.round(q[:, 2], 3).tolist(),
-                "i": np.concatenate([base, base]).tolist(), "j": np.concatenate([base + 1, base + 2]).tolist(),
-                "k": np.concatenate([base + 2, base + 3]).tolist(),
-                "intensity": np.round(val, 2).tolist(), "colorscale": "Inferno", "cmin": 15, "cmax": vmax,
-                "colorbar": {"title": {"text": "T [°C]"}}, "flatshading": True,
-                "hovertemplate": nombres[v - 1] + "<br>T = %{intensity:.1f} °C<extra></extra>",
-            })
-        cuadros.append({"name": f"{t:g} h", "data": trazas})
-    figura = {
-        "data": cuadros[0]["data"],
-        "frames": cuadros,
-        "layout": {
-            "title": {"text": "Fundación: temperatura con un cuarto cortado "
-                              "(clic en la leyenda para ocultar/mostrar una vertida)"},
-            "scene": {"aspectmode": "manual", "aspectratio": {"x": 1, "y": 1, "z": 0.4},
-                      "xaxis": {"range": [-9.5, 9.5]}, "yaxis": {"range": [-9.5, 9.5]}, "zaxis": {"range": [0, 4.5]}},
-            "legend": {"x": 0, "y": 1},
-            "sliders": [{"currentvalue": {"prefix": "t = "}, "steps": [
-                {"label": c["name"], "method": "animate",
-                 "args": [[c["name"]], {"mode": "immediate", "frame": {"duration": 0, "redraw": True}}]}
-                for c in cuadros]}],
-        },
-    }
-    html = f"""<!DOCTYPE html>
-<html lang="es"><head><meta charset="utf-8"><title>Fundación 3D</title>
-<script src="https://cdn.jsdelivr.net/npm/plotly.js-dist-min@2.35.2/plotly.min.js"></script>
-<style>html,body{{margin:0;height:100%;background:#fff;font-family:sans-serif}}#g{{width:100%;height:100%}}</style>
-</head><body><div id="g"></div><script>
-const fig = {json.dumps(figura)};
-Plotly.newPlot("g", fig.data, fig.layout).then(() => Plotly.addFrames("g", fig.frames));
-</script></body></html>"""
-    Path(ruta).write_text(html, encoding="utf-8")

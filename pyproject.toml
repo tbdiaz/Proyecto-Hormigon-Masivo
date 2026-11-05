@@ -23,6 +23,9 @@ mcplan = "mcplan.cli:main"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+mcplan = ["*.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = ["lento: tests que tardan más de ~10 s (pytest -m \"not lento\" para la batería rápida)"]

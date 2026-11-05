@@ -130,3 +130,40 @@ def test_la_secuencia_esta_en_los_inputs(ifc):
     assert np.nanmax(res.Tmax) > 18.0 and len(res.eventos) == 3
     with pytest.raises(ValueError):
         aplicar_cambios(vox, {"Vertida_01": {"Moldaje": "x"}})
+
+
+def test_panel_interactivo(ifc, tmp_path):
+    """El panel lleva beta = h/k de cada borde, JSON válido y un campo igual al de la simulación."""
+    import base64
+    import gzip
+    import json
+
+    from mcplan.panel import Recolector, datos_panel, escribir_panel
+
+    caso = cargar_caso_3d("config/caso_3d.yaml")
+    caso.dx, caso.duracion_h, caso.instantes_3d_h = 0.5, 12.0, [12]
+    caso.cambios = {"Vertida_05": {"activa": False}}
+    vox, dom, plan, registro = preparar(caso, ifc)
+    rec = Recolector(dom, caso.duracion_h, [e[0] for e in plan.eventos()], dx_objetivo=0.5)
+    res = simular_3d(dom, plan, caso.hormigon, caso.suelo, caso.hidratacion, caso.ambiente, caso.duracion_h,
+                     puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h, observador=rec)
+    ruta = tmp_path / "panel.html"
+    escribir_panel(ruta, datos_panel(res, caso, vox, plan, registro, rec, "mcplan simular3d"))
+    html = ruta.read_text(encoding="utf-8")
+    assert "__DATOS_PANEL__" not in html
+    texto = html.split('id="datos">')[1].split("</script>")[0]
+    d = json.loads(texto, parse_constant=lambda c: pytest.fail(f"JSON inválido: {c}"))
+
+    bordes = {b["superficie"]: b for b in d["bordes"]}
+    sup = bordes["Hormigón: caras horizontales al aire (±z)"]
+    assert sup["beta"] == pytest.approx(27.8 / 2.222) and sup["h_ef"] < sup["h"]
+    assert bordes["Suelo: caras laterales"]["beta"] == 0.0 and bordes["Suelo: fondo"]["tipo"] == "Dirichlet"
+    assert d["malla"]["dx"] == d["malla"]["dy"] == d["malla"]["dz"] == 0.5
+    assert d["vertidas"][4]["inicio_h"] is None and d["vertidas"][4]["Tmax"] is None  # oculta
+    assert [e["activas"] for e in d["etapas"]][-1] == [1, 2, 3]
+
+    v = d["vista"]
+    assert v["tiempos"][0] == 0.0 and v["tiempos"][-1] == 12.0
+    campos = np.frombuffer(gzip.decompress(base64.b64decode(v["T"])), "<i2").reshape(len(v["tiempos"]), *v["forma"])
+    ultimo = np.where(campos[-1] == v["sin_dato"], np.nan, campos[-1] / v["escala"])
+    assert np.allclose(ultimo, res.campos[12.0], atol=0.03, equal_nan=True)  # s = 1: la misma malla, en pasos de 0,05 °C

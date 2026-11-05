@@ -9,7 +9,7 @@ contiene este archivo).
 mcplan simular3d config/caso_3d.yaml --dx 0.11 --salida resultados/e09_base --estudio-volumen 0.5 0.275 0.25 0.2 0.1375 0.11 0.1 0.05
 ```
 
-Salen `serie.csv`, `resumen.json`, las figuras de este informe y `fundacion_3d.html`, una vista 3D interactiva.
+Salen `serie.csv`, `resumen.json`, las figuras de este informe y `panel.html`, un panel interactivo que funciona sin internet.
 Pipeline y verificación: [simulacion_3d.md](simulacion_3d.md).
 
 ## 1. BIM y voxelización

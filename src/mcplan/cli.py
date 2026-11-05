@@ -587,12 +587,17 @@ def cmd_simular3d(args):
 
     print(f"\n[4] Simulación 3D: {caso.duracion_h:g} h, dt <= min(0,9 dt_crítico, {caso.dt_max_s:g} s), hidratación Ju y Lei "
           f"con edad equivalente, h = {caso.ambiente.h_superior:g}/{caso.ambiente.h_lateral:g} W/m²K (sup./lat.)")
+    recolector = None
+    if not args.sin_panel:
+        from .panel import Recolector
+
+        recolector = Recolector(dom, caso.duracion_h, [e[0] for e in plan.eventos()])
     t1 = time.perf_counter()
     res = simular_3d(
         dom, plan, caso.hormigon, caso.suelo, caso.hidratacion, caso.ambiente, caso.duracion_h,
         T_suelo_inicial=caso.T_suelo_inicial, guardar_cada_h=caso.guardar_cada_h, dt_max_s=caso.dt_max_s,
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
-        informar=lambda m: print("    " + m),
+        informar=lambda m: print("    " + m), observador=recolector,
     )
     t_calculo = time.perf_counter() - t1
     print(f"    ({t_calculo:.1f} s de cálculo, dt = {res.dts[-1][1]:.0f} s)")
@@ -644,7 +649,7 @@ def cmd_simular3d(args):
 
     if not args.sin_figuras:
         from .graficos import graficar_cortes_3d, graficar_plantas_3d, graficar_puntos_3d, graficar_tmax_3d
-        from .vista3d import exportar_html_3d, graficar_vista_3d
+        from .vista3d import graficar_vista_3d
 
         referencia = None
         if args.comparar_con:
@@ -657,9 +662,12 @@ def cmd_simular3d(args):
         t_vista = sorted({min(res.campos, key=lambda a: abs(a - 12)), float(res.t_h[i])})
         graficar_vista_3d(res, t_vista, salida / "vista_3d.png", dx_vista=args.dx_vista)
         archivos += ["tmax.png", "puntos.png", "cortes_y0.png", "plantas.png", "vista_3d.png"]
-        if not args.sin_html:
-            exportar_html_3d(res, salida / "fundacion_3d.html", dx_vista=args.dx_vista)
-            archivos.append("fundacion_3d.html (abrir en el navegador)")
+    if recolector:
+        from .panel import datos_panel, escribir_panel
+
+        comando = "mcplan " + " ".join(sys.argv[1:])
+        escribir_panel(salida / "panel.html", datos_panel(res, caso, vox, plan, registro, recolector, comando))
+        archivos.append("panel.html (ábrelo en el navegador)")
     print(f"\nArchivos en {salida}: " + ", ".join(archivos) + f"   [total {time.perf_counter() - t0:.0f} s]")
     return 0
 
@@ -829,7 +837,7 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--dx-vista", type=float, default=0.5, help="tamaño de celda de la vista 3D [m]")
     s.add_argument("--salida", help="carpeta de resultados (por defecto la del YAML)")
     s.add_argument("--sin-figuras", action="store_true")
-    s.add_argument("--sin-html", action="store_true")
+    s.add_argument("--sin-panel", action="store_true", help="no genera panel.html")
     s.set_defaults(func=cmd_simular3d)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")

@@ -16,6 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+viz = ["pyvista>=0.44"]  # mcplan vtk (los .vti se escriben sin VTK)
 
 [project.scripts]
 mcplan = "mcplan.cli:main"

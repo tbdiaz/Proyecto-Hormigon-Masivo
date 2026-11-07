@@ -585,3 +585,70 @@ def graficar_plantas_3d(res, ruta, t_h=None):
     fig.suptitle(f"Plantas a media altura de cada vertida, t = {t:g} h", fontsize=11)
     fig.savefig(ruta, dpi=150, bbox_inches="tight")
     plt.close(fig)
+
+
+def graficar_nucleo_superficie(res, ruta, limite_dT=20.0):
+    """Núcleo (Tmax) contra superficie (Tmin del criterio) y su diferencia, con colocaciones y retiros."""
+    fig, (ax, ax2) = plt.subplots(2, 1, figsize=(10, 7), sharex=True, gridspec_kw={"height_ratios": [1.6, 1]})
+    t = res.t_h
+    ax.plot(t, res.Tmax, color="#c0392b", lw=2.2, label="núcleo: Tmax del hormigón")
+    ax.plot(t, res.Tmin_sup, color="#2a78d6", lw=2, label=f"superficie: {res.criterio_Tmin}")
+    if "nucleo_eje" in res.puntos:
+        ax.plot(t, res.puntos["nucleo_eje"], color="#c0392b", lw=1, ls="--", label="punto núcleo del eje")
+    ax.plot(t, res.T_amb, color="0.55", lw=0.8, label="T aire")
+    _marcar_colocaciones(ax, res)
+    for t_r, _ in res.retiros:
+        ax.axvline(t_r, color="0.3", lw=0.8, ls="-.")
+    if res.retiros:
+        ax.plot([], [], color="0.3", lw=0.8, ls="-.", label="retiro de moldaje/aislación")
+    ax.set_ylabel("T [°C]")
+    ax.set_title("Núcleo y superficie (punteadas: colocaciones)", fontsize=10)
+    ax.legend(fontsize=8, loc="lower right")
+    ax.grid(alpha=0.3)
+    ax2.plot(t, res.dT, color="#b3261e", lw=1.8, label="ΔT = Tmax − Tmin")
+    ax2.axhline(limite_dT, color="#b3261e", lw=1, ls="--", label=f"límite {limite_dT:g} °C")
+    j = int(np.nanargmax(res.dT))
+    ax2.annotate(f"{res.dT[j]:.1f} °C a las {t[j]:.0f} h", (t[j], res.dT[j]), xytext=(8, -14),
+                 textcoords="offset points", fontsize=9)
+    ax2.set_xlabel("t [h]")
+    ax2.set_ylabel("ΔT [°C]")
+    ax2.legend(fontsize=8, loc="lower right")
+    ax2.grid(alpha=0.3)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)
+
+
+def graficar_clima(clima, ruta, titulo=None):
+    """Serie que alimenta las condiciones de borde: T aire (y cielo), viento y radiación, sombreada por origen."""
+    from .bordes import T_cielo
+
+    t = clima.t_h
+    fig, ejes = plt.subplots(3, 1, figsize=(10, 7.5), sharex=True)
+    colores = {"pronóstico": "#2a78d6", "transición": "#eda100", "climatología ERA5": "0.6"}
+    origen = np.array(clima.origen)
+    for ax in ejes:
+        for nombre, color in colores.items():
+            m = origen == nombre
+            if m.any():
+                ax.fill_between(t, 0, 1, where=m, transform=ax.get_xaxis_transform(), color=color, alpha=0.12,
+                                step="mid", lw=0)
+    ejes[0].plot(t, clima.T_aire, color="#c0392b", lw=1.5, label="T aire a 2 m")
+    ejes[0].plot(t, T_cielo(clima.T_aire, clima.nubosidad), color="#6250d6", lw=1, label="T cielo efectiva")
+    ejes[0].set_ylabel("T [°C]")
+    ejes[1].plot(t, clima.viento, color="#1baf7a", lw=1.3, label="viento a 10 m")
+    ejes[1].set_ylabel("v [m/s]")
+    ejes[2].plot(t, clima.G, color="#eb6834", lw=1.3, label="radiación global horizontal G")
+    ejes[2].set_ylabel("G [W/m²]")
+    ejes[2].set_xlabel("t [h] desde la primera vertida")
+    for nombre, color in colores.items():
+        if (origen == nombre).any():
+            ejes[0].fill_between([], [], color=color, alpha=0.3, label=f"origen: {nombre}")
+    for ax in ejes:
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8, loc="upper right", ncol=2 if ax is ejes[0] else 1)
+    m = clima.metadata
+    ejes[0].set_title(titulo or f"Clima desde {m.get('fecha_inicio', '')} (sombreado: origen del dato)", fontsize=10)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)

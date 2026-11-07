@@ -43,8 +43,8 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 ## Uso rápido
 
 ```powershell
-pytest                                            # 120 tests automatizados (batería 1D/2D/3D, voxelización, solver 3D), ~1 min
-pytest -m "not lento"                             # la batería rápida (110 tests, ~30 s)
+pytest                                            # 136 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
+pytest -m "not lento"                             # la batería rápida (132 tests, ~1 min)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
@@ -56,6 +56,11 @@ mcplan bloque                                     # bloque 3×3×0,6 m con el pu
 mcplan voxelizar                                  # voxeliza el IFC: vertida_id, volumen vs dx, superficies, activación
 mcplan simular3d                                  # fundación 3D por vertidas con hidratación (config/caso_3d.yaml)
 mcplan simular3d --dx 0.5 --inicio 2=12 --T-colocacion todas=10 --ocultar 5   # la secuencia es un input
+mcplan clima pronostico                           # descarga el pronóstico de Open-Meteo como snapshot nuevo (nunca reemplaza)
+mcplan clima info data/clima/snapshots/<archivo>  # metadata del snapshot (fuente, modelo, descarga, horizonte...)
+mcplan clima serie                                # serie horaria pronóstico + climatología ERA5 que alimenta los bordes
+mcplan simular3d config/caso_14d.yaml --vtk       # caso de 14 días con clima real, moldaje y desmolde (~5 min)
+mcplan vtk resultados/caso_14d/vtk --recorte y --interactivo   # PyVista: clipping/slice, núcleo y superficie
 mcplan simular1d config/caso_base_1d.yaml         # columna del eje escrita a mano: métricas + gráficos en resultados/
 mcplan simular1d config/caso_ifc_1d.yaml          # la misma columna, leída desde el IFC
 mcplan malla config/caso_base_1d.yaml             # sensibilidad de Tmax y ΔT al tamaño de celda
@@ -198,13 +203,18 @@ src/mcplan/
   rectangulo.py      ejercicio de la pizarra: rectángulo con borde Dirichlet, solución exacta, T(t) en puntos
   bloque.py          ejercicio de la pizarra: bloque 3D con el pulso y 4 bordes, solución exacta por modos
   voxelizacion.py    IFC -> grilla: pertenencia por paridad, vertida_id, volumen, superficies, activación
-  simulacion3d.py    fundación 3D por etapas: suelo + vertidas que aparecen en su Inicio_h, Robin, hidratación
+  simulacion3d.py    fundación 3D por etapas: suelo + vertidas que aparecen en su Inicio_h, bordes, hidratación
+  bordes.py          condiciones de borde: viento, onda larga, sol (T sol-aire), moldaje/aislación en serie, desmolde
+  clima.py           Open-Meteo (pronóstico y ERA5), snapshots inmutables con metadata, serie + climatología
+  vtk_io.py          exportación VTK (.vti/.pvd) para ParaView y vista con PyVista (slice, clipping)
   vista3d.py         vista 3D con un cuarto cortado (PNG)
   panel.py, panel.html  panel interactivo de cada corrida: Δx, Δt, β de los bordes, vista 3D, cortes y curvas
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
-docs/                modelo 1D, solver 2D/3D (E05), dossier (E06), vertidas (E07), pipeline 3D (E08), línea base (E09)
+data/clima/          snapshots meteorológicos (JSON tal como llegan de Open-Meteo + metadata) e índice
+docs/                modelo 1D, solver 2D/3D (E05), dossier (E06), vertidas (E07), pipeline 3D (E08), línea base (E09),
+                     ambiente y clima (E10/E11), simulación de 14 días (E12)
 ```
 
 ## Arquitectura
@@ -236,14 +246,17 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D) | ✅ 120 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 136 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |
 | Solver 3D sobre la grilla voxelizada con activación, suelo e hidratación (`mcplan simular3d`) | ✅ igual a `solver_nd` en una caja y en dos etapas |
 | Línea base 3D de la fundación (E09) | ✅ [docs/baseline_3d.md](docs/baseline_3d.md) |
-| Clima real (Open-Meteo, snapshots) | ⏳ pendiente: hoy el ambiente es una sinusoide ilustrativa |
-| Monte Carlo / HPC / PyVista | ⏳ pendiente |
+| Condiciones de borde físicas: viento, onda larga al cielo, sol, moldaje/aislación, desmolde | ✅ `bordes.py`, [docs/ambiente_clima.md](docs/ambiente_clima.md) |
+| Clima real: Open-Meteo (ECMWF IFS + ERA5), snapshots inmutables, horizonte completado con climatología | ✅ `clima.py`, `data/clima/` |
+| Exportación VTK y vista PyVista (slice, clipping, núcleo y superficie) | ✅ `vtk_io.py` |
+| Simulación determinista de 14 días (E12) | ✅ [docs/simulacion_14d.md](docs/simulacion_14d.md) |
+| Monte Carlo / HPC | ⏳ pendiente |
 
 ## Supuestos vigentes
 
@@ -251,7 +264,10 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 |---|---|---|
 | Geometría | docente oficial del curso (ver arriba) | `geometry/` |
 | Temperatura de colocación e inicio de cada vertida | 18 °C; 0, 6, 12, 18, 24 h | valores iniciales de la guía: decisiones del plan |
-| Temperatura ambiente sinusoidal | media 16 °C, amplitud 7 °C | `config/*.yaml` — se reemplaza con Open-Meteo |
+| Temperatura ambiente sinusoidal (casos 1D y E08/E09) | media 16 °C, amplitud 7 °C | `caso_base_1d`, `caso_3d` |
+| Fecha hipotética de inicio | 27 nov 2026, 08:00 (la defensa final es TBD) | `config/caso_14d.yaml` |
+| Clima de la ventana de obra | climatología ERA5 2016–2025 (el pronóstico aún no la cubre) | `data/clima/` |
+| Moldaje | terciado 18 mm en V1, V2, V5; desmolde 72 h (pset); sin aislación (pset = TBD) | `config/caso_14d.yaml` |
 | Suelo modelado / temperatura | 5 m, 15 °C | `config/*.yaml` |
 | Propiedades térmicas y curva adiabática | Ju y Lei (2019) Tabla 2, ec. (2)-(3) | `config/*.yaml`, `hidratacion.py` |
 | Todas las vertidas presentes desde t = 0 | sólo en el caso 1D; el 3D activa cada vertida en su `Inicio_h` | `caso.py` |

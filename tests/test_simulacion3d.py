@@ -155,9 +155,11 @@ def test_panel_interactivo(ifc, tmp_path):
     d = json.loads(texto, parse_constant=lambda c: pytest.fail(f"JSON inválido: {c}"))
 
     bordes = {b["superficie"]: b for b in d["bordes"]}
-    sup = bordes["Hormigón: caras horizontales al aire (±z)"]
-    assert sup["beta"] == pytest.approx(27.8 / 2.222) and sup["h_ef"] < sup["h"]
-    assert bordes["Suelo: caras laterales"]["beta"] == 0.0 and bordes["Suelo: fondo"]["tipo"] == "Dirichlet"
+    sup = bordes["Hormigón: caras superiores al aire"]  # modelo combinado: h fijo, así que mín = media = máx
+    assert sup["beta"] == pytest.approx([27.8 / 2.222] * 3) and sup["h_ef"][0] < sup["h"][0]
+    assert sup["area"] > 0 and bordes["Suelo: fondo"]["area"] > 0
+    assert bordes["Suelo: caras laterales"]["beta"] == [0.0] * 3 and bordes["Suelo: fondo"]["tipo"] == "Dirichlet"
+    assert d["ambiente"]["criterio_Tmin"].startswith("Tmin en el centro")
     assert d["malla"]["dx"] == d["malla"]["dy"] == d["malla"]["dz"] == 0.5
     assert d["vertidas"][4]["inicio_h"] is None and d["vertidas"][4]["Tmax"] is None  # oculta
     assert [e["activas"] for e in d["etapas"]][-1] == [1, 2, 3]

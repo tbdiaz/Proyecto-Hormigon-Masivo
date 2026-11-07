@@ -141,7 +141,7 @@ pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radiu
     </div>
     <div class="leyenda" id="leyenda"></div>
     <svg id="grafico" role="img" aria-label="Temperatura en función del tiempo"></svg>
-    <p class="nota">Las líneas punteadas verticales marcan cada colocación. Haz clic en el gráfico para llevar la vista a ese instante.</p>
+    <p class="nota">Las líneas punteadas verticales marcan cada colocación; las discontinuas, el retiro de moldaje o aislación. Haz clic en el gráfico para llevar la vista a ese instante.</p>
   </section>
 
   <section class="datos">
@@ -158,7 +158,11 @@ pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radiu
     <div class="tarjeta ancho">
       <h2>Condiciones de borde</h2>
       <div class="tabla" id="tablaBordes"></div>
-      <p class="nota">β = h/k [1/m]. Neumann adiabático: β = 0. Dirichlet: β → ∞. h<sub>ef</sub> es lo que usa la celda: h en serie con media celda de hormigón o suelo, 1/(1/h + Δx/2k); en Dirichlet, 2k/Δx. Entre hormigón y suelo, y en las juntas entre vertidas, no hay borde: hay conducción con la media armónica de k. Las áreas son las de la malla al final de la corrida; en los troncos, la escalera sobrestima el área real expuesta.</p>
+      <p class="nota">Cada cara expuesta recibe q = U (T<sub>eq</sub> − T<sub>celda</sub>), con U = 1/(1/h<sub>ext</sub> + R<sub>capa</sub> + Δx/2k). β = h′/k [1/m], con h′ = 1/(1/h<sub>ext</sub> + R<sub>capa</sub>) entre la superficie del hormigón y el ambiente. Neumann adiabático: β = 0. Dirichlet: β → ∞ (en la celda, 2k/Δx). Con clima real, h<sub>ext</sub>, β, U y T<sub>eq</sub> cambian hora a hora: se muestra mínimo–máximo de la serie. Entre hormigón y suelo, y en las juntas entre vertidas, no hay borde: hay conducción con la media armónica de k. En los troncos, la escalera sobrestima el área real expuesta.</p>
+    </div>
+    <div class="tarjeta ancho">
+      <h2>Ambiente, moldaje y aislación</h2>
+      <div id="ambiente"></div>
     </div>
     <div class="tarjeta ancho">
       <h2>Vertidas: secuencia y error de volumen</h2>
@@ -412,6 +416,7 @@ function seriesActuales() {
   const color = n => `var(--s${n})`;
   if (est.curvas === "global") return [
     { id: "Tmax", n: "Tmax del hormigón", T: S.Tmax, c: color(1), a: 2.4 },
+    { id: "Tmin", n: "Tmin de superficie (criterio)", T: S.Tmin, c: color(7) },
     { id: "dT", n: "ΔT = Tmax − Tmin de superficie", T: S.dT, c: color(2) },
     { id: "amb", n: "T ambiente", T: S.T_amb, c: "var(--texto3)", a: 1 },
   ];
@@ -443,6 +448,7 @@ function dibujarCurvas() {
   }
   const ex = sv("text", { x: (m.l + W - m.r) / 2, y: H - 3, "text-anchor": "middle", fill: tinta, "font-size": 11 }); ex.textContent = "t [h]"; svg.append(ex);
   const ey = sv("text", { x: 12, y: (m.t + H - m.b) / 2, "text-anchor": "middle", fill: tinta, "font-size": 11, transform: `rotate(-90 12 ${(m.t + H - m.b) / 2})` }); ey.textContent = "°C"; svg.append(ey);
+  for (const r of D.retiros) svg.append(sv("line", { x1: X(r.t), x2: X(r.t), y1: m.t, y2: H - m.b, stroke: "var(--texto2)", "stroke-dasharray": "6 3" }));
   for (const c of D.colocaciones) svg.append(sv("line", { x1: X(c.t), x2: X(c.t), y1: m.t, y2: H - m.b, stroke: "var(--texto3)", "stroke-dasharray": "1 3" }));
   if (est.curvas === "global") for (const [val, nom] of [[D.limites.Tmax, `límite Tmax ${D.limites.Tmax} °C`], [D.limites.dT, `límite ΔT ${D.limites.dT} °C`]]) {
     svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(val), y2: Y(val), stroke: "var(--texto2)", "stroke-dasharray": "5 4" }));
@@ -513,7 +519,7 @@ $("tiempo").addEventListener("input", e => ponerInstante(+e.target.value));
 function contenido() {
   const R = D.resultado, L = D.limites, M = D.malla, Tm = D.tiempo;
   const horaCol = `${Tm.hora_inicio}:00`;
-  $("subtitulo").textContent = `Caso ${D.caso} · ${fmt(Tm.duracion_h, 0)} h simuladas · primera vertida a las ${horaCol}`;
+  $("subtitulo").textContent = `Caso ${D.caso} · ${fmt(Tm.duracion_h, 0)} h simuladas · primera vertida ${D.ambiente.fecha_inicio ? D.ambiente.fecha_inicio.replace("T", " ") + " (hora local)" : "a las " + horaCol}`;
   const estado = ok => el("span", { class: "estado " + (ok ? "bien" : "mal") }, ok ? "✓ cumple" : "✕ no cumple");
   const kpi = (e, v, det, st) => el("div", { class: "tarjeta kpi" }, el("div", { class: "etq" }, e), el("div", { class: "val" }, v, st || ""), el("div", { class: "det" }, det));
   $("kpis").replaceChildren(
@@ -529,12 +535,29 @@ function contenido() {
     par("Grilla", `${M.nx} × ${M.ny} × ${M.nz}`), par("Celdas de hormigón", entero(M.hormigon)), par("Celdas de suelo", entero(M.suelo)),
     par("Δt usado", `${fmt(Tm.dt, 0)} s`), par("Δt máximo", Tm.dt_max === null ? "sin tope" : `${fmt(Tm.dt_max, 0)} s`), par("Factor de seguridad", fmt(Tm.seguridad, 2)));
 
+  const rango = (x, d = 1) => !x ? "—" : Math.abs(x[2] - x[0]) < 0.5 * 10 ** -d ? fmt(x[0], d) : `${fmt(x[0], d)}–${fmt(x[2], d)}`;
   tabla($("tablaBordes"), [
     { t: "Superficie", v: f => f.superficie }, { t: "Tipo", v: f => f.tipo },
-    { t: "β = h/k [1/m]", n: 1, v: f => f.tipo === "Dirichlet" ? "∞" : fmt(f.beta, 2) },
-    { t: "h [W/m²K]", n: 1, v: f => f.h === null ? "—" : fmt(f.h, 1) }, { t: "k [W/mK]", n: 1, v: f => fmt(f.k, 3) },
-    { t: "h_ef [W/m²K]", n: 1, v: f => fmt(f.h_ef, 2) }, { t: "Temperatura o flujo", v: f => f.referencia }, { t: "Área [m²]", n: 1, v: f => fmt(f.area, 1) },
+    { t: "Capa (R [m²K/W])", v: f => f.capa === "desnuda" || f.capa === "—" ? f.capa : `${f.capa} (${fmt(f.R, 3)})` },
+    { t: "β = h′/k [1/m]", n: 1, v: f => f.tipo === "Dirichlet" ? "∞" : rango(f.beta, 2) },
+    { t: "h_ext [W/m²K]", n: 1, v: f => rango(f.h) }, { t: "k [W/mK]", n: 1, v: f => fmt(f.k, 3) },
+    { t: "U [W/m²K]", n: 1, v: f => rango(f.h_ef, 2) },
+    { t: "T_eq [°C]", n: 1, v: f => f.T_eq ? rango(f.T_eq) : "—" }, { t: "Nota", v: f => f.nota },
+    { t: "Área [m²]", n: 1, v: f => f.area === null || f.area === undefined ? "—" : fmt(f.area, 1) },
   ], D.bordes);
+  const A = D.ambiente, amb = $("ambiente");
+  amb.append(el("p", {}, el("b", {}, "Superficie: "), A.descripcion), el("p", {}, el("b", {}, "Temperatura del aire: "), A.T_amb),
+             el("p", {}, el("b", {}, "Criterio de ΔT: "), A.criterio_Tmin));
+  for (const linea of A.cubiertas) amb.append(el("p", {}, el("b", {}, "Capa: "), linea));
+  if (D.retiros.length) amb.append(el("p", {}, el("b", {}, "Retiros: "), D.retiros.map(r => `${fmt(r.t, 0)} h: ${r.evento}`).join("; ")));
+  if (A.clima) {
+    const C = A.clima, lista = [`desde ${A.fecha_inicio} (hora local ${C.zona_horaria})`,
+      `${C.horas_pronostico} h de pronóstico, ${C.horas_transicion} h de transición, ${C.horas_climatologia} h de climatología`];
+    if (C.pronostico) lista.push(`pronóstico ${C.pronostico.archivo} (${C.pronostico.modelo}, descargado ${C.pronostico.descargado_utc}, cubre ${C.pronostico.horizonte.join(" .. ")})`);
+    if (C.climatologia) lista.push(`climatología ${C.climatologia.archivo} (ERA5 ${C.climatologia.anios[0]}–${C.climatologia.anios.at(-1)}, ±${C.climatologia.ventana_dias} días)`);
+    if (C.suelo) lista.push(`suelo ERA5: ${C.suelo.T_capas_C.map(x => fmt(x)).join(" / ")} °C a ${C.suelo.profundidades_m.map(x => fmt(x, 2)).join(" / ")} m; fondo ${fmt(C.suelo.T_fondo_C)} °C`);
+    amb.append(el("p", {}, el("b", {}, "Clima: "), lista.join(" · ")));
+  }
   tabla($("tablaMateriales"), [
     { t: "Material", v: f => f.nombre }, { t: "k [W/mK]", n: 1, v: f => fmt(f.k, 3) }, { t: "ρ [kg/m³]", n: 1, v: f => fmt(f.rho, 0) },
     { t: "c_p [J/kgK]", n: 1, v: f => fmt(f.cp, 0) }, { t: "α [m²/s]", n: 1, v: f => f.alpha.toExponential(2).replace(".", ",") },

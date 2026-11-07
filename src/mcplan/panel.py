@@ -17,7 +17,7 @@ from pathlib import Path
 import numpy as np
 
 from .simulacion3d import HORMIGON, SUELO
-from .voxelizacion import VACIO, caras
+from .bordes import filas_bordes
 
 _ESCALA_T = 20  # el campo se guarda como int16 en pasos de 0,05 °C
 _SIN_DATO = -32768  # aire, o vertida que todavía no se coloca
@@ -70,41 +70,47 @@ def _lista(a):
     return [None if not np.isfinite(x) else round(float(x), 3) for x in np.asarray(a, dtype=float)]
 
 
-def _condiciones_de_borde(caso, dom, vox, activas_finales):
-    """Una fila por tipo de superficie. beta = h/k [1/m]: Neumann adiabático = 0, Dirichlet = infinito."""
-    dx, amb = dom.dx, caso.ambiente
-    kh, ks = caso.hormigon.k, caso.suelo.k
-    c = caras(vox.vertida_id, activas_finales)
-    area = dx**2
-    base = c["exterior"]["-z"] * area
-    planta = dom.forma[0] * dom.forma[1] * area
+def _areas(dom, vox, plan, caso):
+    """Área [m²] de cada tipo de superficie con todas las vertidas del plan colocadas (sin contar capas)."""
+    from .simulacion3d import _caras_expuestas
+    from .bordes import LAT, SUP
+
+    final = (dom.material == SUELO) | np.isin(dom.vertida_id, plan.vertidas_activas(caso.duracion_h))
+    celda, _, orientacion = _caras_expuestas(final)
+    mat = dom.material.reshape(-1)[celda]
+    vid = dom.vertida_id.reshape(-1)[celda]
+    a = dom.dx**2
+    con_moldaje = set()
+    for c in caso.cubiertas.cubiertas:
+        if c.tipo == "moldaje":
+            con_moldaje |= set(c.vertidas)
+    lat_h = (mat == HORMIGON) & (orientacion == LAT)
+    moldeadas = lat_h & np.isin(vid, list(con_moldaje))
     n_suelo = int(np.count_nonzero((dom.material == SUELO).any(axis=(0, 1))))
+    return {
+        "sup": float(np.count_nonzero((mat == HORMIGON) & (orientacion != LAT)) * a),
+        "lat_mol": float(np.count_nonzero(moldeadas) * a), "lat": float(np.count_nonzero(lat_h & ~moldeadas) * a),
+        "suelo_sup": float(np.count_nonzero((mat == SUELO) & (orientacion == SUP)) * a),
+        "fondo": float(dom.forma[0] * dom.forma[1] * a) if n_suelo else None,
+        "suelo_lat": float(2 * (dom.forma[0] + dom.forma[1]) * n_suelo * a) if n_suelo else None,
+    }
 
-    def robin(superficie, h, k, a, nota):
-        return {"superficie": superficie, "tipo": "Robin", "h": h, "k": k, "beta": h / k if h > 0 else 0.0,
-                "h_ef": 1.0 / (1.0 / h + dx / (2 * k)) if h > 0 else 0.0, "referencia": nota, "area": a}
 
-    t_amb = caso.T_amb_texto
-    filas = [
-        robin("Hormigón: caras horizontales al aire (±z)", amb.h_superior, kh,
-              (c["exterior"]["+z"]) * area, t_amb),
-        robin("Hormigón: caras verticales al aire (±x, ±y)", amb.h_lateral, kh,
-              sum(c["exterior"][e] for e in ("-x", "+x", "-y", "+y")) * area, t_amb),
-    ]
-    if n_suelo:
-        filas += [
-            robin("Suelo: superficie al aire (z = 0)", amb.h_superior, ks, planta - base, t_amb),
-            {"superficie": "Suelo: fondo", "tipo": "Dirichlet", "h": None, "k": ks, "beta": None,
-             "h_ef": 2 * ks / dx, "referencia": f"T = {amb.T_fondo:g} °C", "area": planta},
-            {"superficie": "Suelo: caras laterales", "tipo": "Neumann", "h": 0.0, "k": ks, "beta": 0.0, "h_ef": 0.0,
-             "referencia": "q = 0 (adiabática)", "area": 2 * (dom.forma[0] + dom.forma[1]) * n_suelo * area},
-        ]
-    return filas
+def _limpio(x):
+    """Listas y números para JSON: NaN e infinito pasan a null."""
+    if isinstance(x, dict):
+        return {k: _limpio(v) for k, v in x.items()}
+    if isinstance(x, (list, tuple)):
+        return [_limpio(v) for v in x]
+    if isinstance(x, (float, np.floating)):
+        return float(x) if np.isfinite(x) else None
+    if isinstance(x, np.integer):
+        return int(x)
+    return x
 
 
 def datos_panel(res, caso, vox, plan, registro, rec, comando) -> dict:
     dom = res.dominio
-    finales = np.isin(vox.vertida_id, plan.vertidas_activas(caso.duracion_h))
     i, j = int(np.nanargmax(res.Tmax)), int(np.nanargmax(res.dT))
     k, h_c = caso.hormigon, caso.hidratacion
     vertidas = []
@@ -130,7 +136,12 @@ def datos_panel(res, caso, vox, plan, registro, rec, comando) -> dict:
                   "error_total": vox.error_volumen_total, "superposiciones": vox.superposiciones},
         "tiempo": {"duracion_h": caso.duracion_h, "hora_inicio": caso.hora_inicio, "dt": res.dts[-1][1],
                    "dt_max": caso.dt_max_s, "seguridad": caso.factor_seguridad, "guardar_cada_h": caso.guardar_cada_h},
-        "bordes": _condiciones_de_borde(caso, dom, vox, finales),
+        "bordes": _limpio(filas_bordes(caso.ambiente, caso.cubiertas, dom.dx, caso.hormigon.k, caso.suelo.k,
+                                       _areas(dom, vox, plan, caso))),
+        "ambiente": {"descripcion": caso.ambiente.describir(), "T_amb": caso.T_amb_texto,
+                     "cubiertas": caso.cubiertas.describir(plan.inicio_h), "clima": _limpio(caso.clima_info or None),
+                     "fecha_inicio": caso.fecha_inicio, "criterio_Tmin": res.criterio_Tmin},
+        "retiros": [{"t": t, "evento": d} for t, d in res.retiros],
         "materiales": [
             {"nombre": nombre, "k": m.k, "rho": m.rho, "cp": m.cp, "alpha": m.k / m.capacidad}
             for nombre, m in (("Hormigón", k), ("Suelo", caso.suelo))
@@ -142,8 +153,10 @@ def datos_panel(res, caso, vox, plan, registro, rec, comando) -> dict:
                    for t, a, c in res.etapas],
         "limites": {"Tmax": caso.limite_Tmax, "dT": caso.limite_dT},
         "resultado": {"Tmax": float(res.Tmax[i]), "t_Tmax": float(res.t_h[i]), "pos_Tmax": res.Tmax_pos[i].tolist(),
-                      "dT": float(res.dT[j]), "t_dT": float(res.t_h[j])},
+                      "dT": float(res.dT[j]), "t_dT": float(res.t_h[j]), "pos_Tmin": _limpio(res.Tmin_pos[j].tolist()),
+                      "Tmin": _limpio(float(res.Tmin_sup[j]))},
         "series": {"t": _lista(res.t_h), "Tmax": _lista(res.Tmax), "dT": _lista(res.dT), "T_amb": _lista(res.T_amb),
+                   "Tmin": _lista(res.Tmin_sup),
                    "vertidas": [_lista(res.Tmax_vertida[:, n]) for n in range(vox.n_vertidas)],
                    "puntos": [{"nombre": n, "pos": list(res.posiciones[n]), "T": _lista(T)}
                               for n, T in res.puntos.items()]},

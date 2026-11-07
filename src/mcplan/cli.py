@@ -12,6 +12,8 @@
     mcplan voxelizar  [geometry/foundation.ifc] [--dx 0.05] [--estudio 0.5 0.25 0.1 0.05]
     mcplan simular3d  [config/caso_3d.yaml] [--dx 0.275] [--duracion 336] [--inicio 2=12] [--T-colocacion 3=10]
                       [--ocultar 5] [--estudio-volumen 0.5 0.275 0.11] [--comparar-con resultados/.../serie.csv]
+    mcplan clima pronostico | era5 | info ARCHIVO | listar | serie [config/caso_14d.yaml]
+    mcplan vtk resultados/caso_14d/vtk [--t 96] [--corte x|y|z | --recorte x|y|z] [--pos 0] [--interactivo]
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -547,6 +549,21 @@ def cmd_simular3d(args):
         caso.dt_max_s = args.dt_max
     if args.salida:
         caso.salida = Path(args.salida)
+    if args.fecha_inicio:
+        caso.fecha_inicio = args.fecha_inicio
+    if args.sin_moldaje:
+        caso.cubiertas_cfg.pop("moldaje", None)
+    elif args.retiro_moldaje is not None and "moldaje" in caso.cubiertas_cfg:
+        caso.cubiertas_cfg["moldaje"] = {**caso.cubiertas_cfg["moldaje"], "retiro_h": args.retiro_moldaje}
+    if args.aislacion:
+        if args.aislacion == "ninguna":
+            caso.cubiertas_cfg.pop("aislacion", None)
+        else:
+            caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg.get("aislacion", {}), "capa": args.aislacion}
+    if args.aislacion_caras and "aislacion" in caso.cubiertas_cfg:
+        caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "caras": args.aislacion_caras}
+    if args.retiro_aislacion is not None and "aislacion" in caso.cubiertas_cfg:
+        caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "retiro_h": args.retiro_aislacion}
 
     t0 = time.perf_counter()
     vertidas = leer_vertidas(caso.ifc)
@@ -585,8 +602,38 @@ def cmd_simular3d(args):
             "fuera del horizonte" if ini > caso.duracion_h else "se coloca")
         print(f"    {vox.nombres[i - 1]:>11} {ini:9.1f} {plan.T_colocacion[i - 1]:12.1f}  {estado}")
 
-    print(f"\n[4] Simulación 3D: {caso.duracion_h:g} h, dt <= min(0,9 dt_crítico, {caso.dt_max_s:g} s), hidratación Ju y Lei "
-          f"con edad equivalente, h = {caso.ambiente.h_superior:g}/{caso.ambiente.h_lateral:g} W/m²K (sup./lat.)")
+    from .bordes import filas_bordes
+
+    amb = caso.ambiente
+    print("\n[4] Ambiente y condiciones de borde:")
+    if amb.clima is not None:
+        m = caso.clima_info
+        print(f"    clima desde {m['fecha_inicio']} (hora local {m['zona_horaria']}): "
+              f"{m['horas_pronostico']} h de pronóstico, {m['horas_transicion']} h de transición, "
+              f"{m['horas_climatologia']} h de climatología")
+        if m["pronostico"]:
+            pr = m["pronostico"]
+            print(f"      pronóstico: {pr['archivo']} ({pr['modelo']}, descargado {pr['descargado_utc']}, "
+                  f"cubre {pr['horizonte'][0]} .. {pr['horizonte'][1]})")
+        if m["climatologia"]:
+            cl = m["climatologia"]
+            print(f"      climatología: {cl['archivo']} (ERA5 {cl['anios'][0]}–{cl['anios'][-1]}, ±{cl['ventana_dias']} días, "
+                  f"{cl['muestras_por_hora']} muestras por hora)")
+        if m.get("suelo"):
+            su = m["suelo"]
+            print(f"      suelo (ERA5): T inicial {su['T_capas_C']} °C a {su['profundidades_m']} m; fondo {su['T_fondo_C']} °C")
+    print(f"    superficie: {amb.describir()}")
+    for linea in caso.cubiertas.describir(plan.inicio_h):
+        print(f"    {linea}")
+    print(f"    {'superficie':<44} {'tipo':<9} {'h [W/m²K]':>17} {'β = h/k [1/m]':>17} {'U [W/m²K]':>17}")
+    rango = lambda x: "—" if x is None else (f"{x[0]:.1f}" if abs(x[2] - x[0]) < 0.05 else f"{x[0]:.1f}–{x[2]:.1f}")  # noqa: E731
+    filas = filas_bordes(amb, caso.cubiertas, caso.dx, caso.hormigon.k, caso.suelo.k)
+    for f in filas:
+        beta = "∞" if f["tipo"] == "Dirichlet" else rango(f["beta"])
+        print(f"    {f['superficie']:<44} {f['tipo']:<9} {rango(f['h']):>17} {beta:>17} {rango(f['h_ef']):>17}")
+
+    print(f"\n[5] Simulación 3D: {caso.duracion_h:g} h, dt <= min(0,9 dt_crítico, {caso.dt_max_s:g} s), hidratación Ju y Lei "
+          f"con edad equivalente")
     recolector = None
     if not args.sin_panel:
         from .panel import Recolector
@@ -597,18 +644,26 @@ def cmd_simular3d(args):
         dom, plan, caso.hormigon, caso.suelo, caso.hidratacion, caso.ambiente, caso.duracion_h,
         T_suelo_inicial=caso.T_suelo_inicial, guardar_cada_h=caso.guardar_cada_h, dt_max_s=caso.dt_max_s,
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
-        informar=lambda m: print("    " + m), observador=recolector,
+        informar=lambda m: print("    " + m), observador=recolector, cubiertas=caso.cubiertas,
+        profundidad_tmin=caso.profundidad_tmin, superficie_tmin=caso.superficie_tmin,
     )
     t_calculo = time.perf_counter() - t1
     print(f"    ({t_calculo:.1f} s de cálculo, dt = {res.dts[-1][1]:.0f} s)")
 
     i = int(np.nanargmax(res.Tmax))
     j = int(np.nanargmax(res.dT))
-    print("\n[5] Resultados:")
+    print("\n[6] Resultados:")
     print(f"    Tmax  = {res.Tmax[i]:.1f} °C a las {res.t_h[i]:.0f} h en ({', '.join(f'{c:.2f}' for c in res.Tmax_pos[i])}) m"
           f"  -> {'cumple' if res.Tmax[i] <= caso.limite_Tmax else 'NO cumple'} {caso.limite_Tmax:g} °C")
-    print(f"    ΔTmax = {res.dT[j]:.1f} °C a las {res.t_h[j]:.0f} h (Tmax − Tmin de las celdas de superficie)"
+    print(f"    ΔTmax = {res.dT[j]:.1f} °C a las {res.t_h[j]:.0f} h ({res.criterio_Tmin})"
           f"  -> {'cumple' if res.dT[j] <= caso.limite_dT else 'NO cumple'} {caso.limite_dT:g} °C")
+    print(f"            Tmax {res.Tmax[j]:.1f} °C en ({', '.join(f'{c:.2f}' for c in res.Tmax_pos[j])}) m; "
+          f"Tmin {res.Tmin_sup[j]:.1f} °C en ({', '.join(f'{c:.2f}' for c in res.Tmin_pos[j])}) m")
+    if res.superficie_tmin == "plana":
+        jt = int(np.nanargmax(res.Tmax - res.Tmin_todas))
+        print(f"    (contando aristas y vértices: ΔTmax = {res.Tmax[jt] - res.Tmin_todas[jt]:.1f} °C a las "
+              f"{res.t_h[jt]:.0f} h, Tmin {res.Tmin_todas[jt]:.1f} °C en "
+              f"({', '.join(f'{c:.2f}' for c in res.Tmin_todas_pos[jt])}) m)")
     for v in range(vox.n_vertidas):
         col = res.Tmax_vertida[:, v]
         if np.isfinite(col).any():
@@ -623,14 +678,23 @@ def cmd_simular3d(args):
 
     salida = caso.salida
     salida.mkdir(parents=True, exist_ok=True)
-    columnas = (["t_h", "Tmax_C", "dT_C", "T_amb_C"] + [f"Tmax_{n}" for n in vox.nombres]
+    columnas = (["t_h", "Tmax_C", "dT_C", "T_amb_C", "Tmin_sup_C", "Tmin_aristas_C"] + [f"Tmax_{n}" for n in vox.nombres]
                 + [f"T_{n}" for n in res.puntos])
+    clima = amb.clima
+    if clima is not None:
+        columnas += ["viento_m_s", "G_W_m2", "nubosidad", "origen_clima"]
     with open(salida / "serie.csv", "w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         w.writerow(columnas)
         for k in range(len(res.t_h)):
-            w.writerow([f"{res.t_h[k]:g}", f"{res.Tmax[k]:.3f}", f"{res.dT[k]:.3f}", f"{res.T_amb[k]:.3f}"]
-                       + [f"{x:.3f}" for x in res.Tmax_vertida[k]] + [f"{res.puntos[n][k]:.3f}" for n in res.puntos])
+            fila = ([f"{res.t_h[k]:g}", f"{res.Tmax[k]:.3f}", f"{res.dT[k]:.3f}", f"{res.T_amb[k]:.3f}",
+                     f"{res.Tmin_sup[k]:.3f}", f"{res.Tmin_todas[k]:.3f}"] + [f"{x:.3f}" for x in res.Tmax_vertida[k]]
+                    + [f"{res.puntos[n][k]:.3f}" for n in res.puntos])
+            if clima is not None:
+                _, v, G, c = clima.en(res.t_h[k])
+                h = int(min(round(res.t_h[k]), len(clima.origen) - 1))
+                fila += [f"{v:.2f}", f"{G:.1f}", f"{c:.2f}", clima.origen[h]]
+            w.writerow(fila)
     resumen = {
         "caso": str(args.caso), "dx_m": caso.dx, "duracion_h": caso.duracion_h, "cambios": registro,
         "error_volumen": {n: vox.error_volumen(k + 1) for k, n in enumerate(vox.nombres)},
@@ -638,7 +702,15 @@ def cmd_simular3d(args):
         "secuencia": [{"vertida": n, "Inicio_h": float(plan.inicio_h[k]) if np.isfinite(plan.inicio_h[k]) else None,
                        "T_colocacion_C": float(plan.T_colocacion[k])} for k, n in enumerate(vox.nombres)],
         "Tmax_C": float(res.Tmax[i]), "t_Tmax_h": float(res.t_h[i]), "posicion_Tmax_m": res.Tmax_pos[i].tolist(),
-        "dTmax_C": float(res.dT[j]), "t_dTmax_h": float(res.t_h[j]),
+        "dTmax_C": float(res.dT[j]), "t_dTmax_h": float(res.t_h[j]), "criterio_Tmin": res.criterio_Tmin,
+        "Tmax_en_dTmax_posicion_m": res.Tmax_pos[j].tolist(), "Tmin_en_dTmax_C": float(res.Tmin_sup[j]),
+        "Tmin_en_dTmax_posicion_m": res.Tmin_pos[j].tolist(),
+        "dTmax_con_aristas_C": float(np.nanmax(res.Tmax - res.Tmin_todas)),
+        "t_dTmax_con_aristas_h": float(res.t_h[int(np.nanargmax(res.Tmax - res.Tmin_todas))]),
+        "Tmin_aristas_posicion_m": res.Tmin_todas_pos[int(np.nanargmax(res.Tmax - res.Tmin_todas))].tolist(),
+        "fecha_inicio": caso.fecha_inicio, "clima": caso.clima_info or caso.T_amb_texto,
+        "ambiente": amb.describir(), "cubiertas": caso.cubiertas.describir(plan.inicio_h),
+        "retiros": [{"t_h": t, "evento": d} for t, d in res.retiros], "bordes": filas,
         "Tmax_vertida_C": {n: (float(np.nanmax(res.Tmax_vertida[:, k])) if np.isfinite(res.Tmax_vertida[:, k]).any()
                                else None) for k, n in enumerate(vox.nombres)},
         "dt_s": [{"desde_h": a, "dt_s": b, "dt_critico_s": float(c)} for a, b, c in res.dts],
@@ -648,7 +720,8 @@ def cmd_simular3d(args):
     archivos = ["serie.csv", "resumen.json"]
 
     if not args.sin_figuras:
-        from .graficos import graficar_cortes_3d, graficar_plantas_3d, graficar_puntos_3d, graficar_tmax_3d
+        from .graficos import (graficar_clima, graficar_cortes_3d, graficar_nucleo_superficie, graficar_plantas_3d,
+                               graficar_puntos_3d, graficar_tmax_3d)
         from .vista3d import graficar_vista_3d
 
         referencia = None
@@ -659,9 +732,19 @@ def cmd_simular3d(args):
         graficar_puntos_3d(res, salida / "puntos.png")
         graficar_cortes_3d(res, salida / "cortes_y0.png")
         graficar_plantas_3d(res, salida / "plantas.png")
+        graficar_nucleo_superficie(res, salida / "nucleo_superficie.png", caso.limite_dT)
+        archivos.append("nucleo_superficie.png")
+        if clima is not None:
+            graficar_clima(clima, salida / "clima.png")
+            archivos.append("clima.png")
         t_vista = sorted({min(res.campos, key=lambda a: abs(a - 12)), float(res.t_h[i])})
         graficar_vista_3d(res, t_vista, salida / "vista_3d.png", dx_vista=args.dx_vista)
         archivos += ["tmax.png", "puntos.png", "cortes_y0.png", "plantas.png", "vista_3d.png"]
+    if args.vtk:
+        from .vtk_io import exportar_vtk
+
+        pvd = exportar_vtk(res, salida / "vtk")
+        archivos.append(f"vtk/{pvd.name} (ParaView o `mcplan vtk {salida / 'vtk'}`)")
     if recolector:
         from .panel import datos_panel, escribir_panel
 
@@ -669,6 +752,129 @@ def cmd_simular3d(args):
         escribir_panel(salida / "panel.html", datos_panel(res, caso, vox, plan, registro, recolector, comando))
         archivos.append("panel.html (ábrelo en el navegador)")
     print(f"\nArchivos en {salida}: " + ", ".join(archivos) + f"   [total {time.perf_counter() - t0:.0f} s]")
+    return 0
+
+
+def cmd_clima(args):
+    from pathlib import Path
+
+    import numpy as np
+
+    from . import clima as cl
+
+    if args.accion == "pronostico":
+        ruta = cl.descargar_pronostico(args.sitio, args.modelo, args.dias, args.carpeta, args.indice)
+        print(f"Snapshot nuevo: {ruta}")
+        args.archivo = ruta
+        args.accion = "info"
+    elif args.accion == "era5":
+        anios = range(args.anios[0], args.anios[1] + 1)
+        ruta = cl.descargar_era5(args.fecha_inicio, args.sitio, args.dias, args.margen, anios, args.carpeta,
+                                 args.indice)
+        print(f"Snapshot nuevo: {ruta}")
+        args.archivo = ruta
+        args.accion = "info"
+    if args.accion == "info":
+        snap = cl.leer_snapshot(args.archivo)
+        m = snap["metadata"]
+        print(f"Archivo:        {args.archivo}  (SHA-256 verificado)")
+        print(f"Tipo:           {m['tipo']}")
+        print(f"Fuente:         {m['fuente']}  ({m['endpoint']})")
+        print(f"Modelo:         {m['modelo']}")
+        print(f"Descargado:     {m['descargado_utc']} (UTC)")
+        print(f"Sitio pedido:   {m['sitio']['nombre']} ({m['sitio']['grupo']}): lat {m['sitio']['latitud']}, "
+              f"lon {m['sitio']['longitud']}")
+        pm = m["punto_modelo"]
+        print(f"Punto de grilla: lat {pm['latitud']}, lon {pm['longitud']}, elevación {pm['elevacion_m']} m")
+        print(f"Zona horaria:   {m['zona_horaria']} (UTC{m['utc_offset_s'] / 3600:+g} h)")
+        h = m["horizonte"]
+        print(f"Horizonte:      {h['desde']} .. {h['hasta']} ({h['horas']} horas)")
+        if "ultima_hora_con_dato" in h:
+            for v, u in h["ultima_hora_con_dato"].items():
+                print(f"                {v}: con dato hasta {u}")
+        if "anios" in m:
+            print(f"Años:           {m['anios'][0]}–{m['anios'][-1]}, ventana {m['ventana']}")
+        print("Variables y unidades:")
+        for v in m["variables"]:
+            print(f"                {v} [{m['unidades'].get(v, '?')}]")
+        print(f"SHA-256:        {m['sha256_respuesta']}")
+    elif args.accion == "listar":
+        indice = Path(args.indice)
+        if not indice.exists():
+            print("Todavía no hay snapshots.")
+            return 0
+        import csv
+
+        with open(indice, encoding="utf-8") as f:
+            for fila in csv.DictReader(f):
+                print(f"{fila['descargado_utc']}  {fila['tipo']:<11} {fila['modelo']:<13} "
+                      f"{fila['horizonte_desde']} .. {fila['horizonte_hasta']}  {fila['archivo']}")
+    elif args.accion == "serie":
+        from .graficos import graficar_clima
+        from .simulacion3d import cargar_caso_3d, preparar_clima
+
+        caso = cargar_caso_3d(args.caso)
+        if args.fecha_inicio:
+            caso.fecha_inicio = args.fecha_inicio
+        if args.duracion:
+            caso.duracion_h = args.duracion
+        if caso.clima_cfg is None:
+            raise ValueError(f"{args.caso} no tiene sección `clima`")
+        preparar_clima(caso)
+        clima, m = caso.ambiente.clima, caso.clima_info
+        salida = Path(args.salida)
+        salida.mkdir(parents=True, exist_ok=True)
+        graficar_clima(clima, salida / "clima.png")
+        import csv
+
+        from .bordes import T_cielo
+
+        with open(salida / "clima.csv", "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["t_h", "fecha_local", "T_aire_C", "viento_m_s", "G_W_m2", "nubosidad", "T_cielo_C", "origen"])
+            t0 = np.datetime64(caso.fecha_inicio, "m")
+            for k, t in enumerate(clima.t_h):
+                w.writerow([f"{t:g}", str(t0 + np.timedelta64(int(t), "h")), f"{clima.T_aire[k]:.2f}",
+                            f"{clima.viento[k]:.2f}", f"{clima.G[k]:.1f}", f"{clima.nubosidad[k]:.2f}",
+                            f"{float(T_cielo(clima.T_aire[k], clima.nubosidad[k])):.2f}", clima.origen[k]])
+        print(f"Serie desde {m['fecha_inicio']} ({len(clima.t_h)} horas, hora local {m['zona_horaria']}):")
+        print(f"  {m['horas_pronostico']} h de pronóstico, {m['horas_transicion']} h de transición, "
+              f"{m['horas_climatologia']} h de climatología ERA5")
+        for clave in ("pronostico", "climatologia"):
+            if m[clave]:
+                print(f"  {clave}: {m[clave]['archivo']} (descargado {m[clave]['descargado_utc']})")
+        print(f"  T aire {clima.T_aire.min():.1f} .. {clima.T_aire.max():.1f} °C, viento {clima.viento.min():.1f} .. "
+              f"{clima.viento.max():.1f} m/s, G máx {clima.G.max():.0f} W/m²")
+        if m.get("suelo"):
+            print(f"  suelo: {m['suelo']}")
+        print(f"Archivos: {salida / 'clima.png'}, {salida / 'clima.csv'}")
+    return 0
+
+
+def cmd_vtk(args):
+    from pathlib import Path
+
+    from .vtk_io import instantes_vtk, ver_pyvista
+
+    ruta = Path(args.ruta)
+    if ruta.is_dir():
+        instantes = instantes_vtk(ruta)
+        t, ruta = min(instantes, key=lambda x: abs(x[0] - args.t)) if args.t is not None else max(instantes)
+        print(f"Instantes disponibles: {', '.join(f'{x:g} h' for x, _ in instantes)}; se abre t = {t:g} h")
+    plano = args.corte or args.recorte
+    captura = args.captura or (None if args.interactivo else ruta.with_suffix(".png"))
+    info = ver_pyvista(ruta, corte=args.corte, recorte=args.recorte, posicion=args.pos, sin_suelo=args.sin_suelo,
+                       captura=captura, interactivo=args.interactivo, escala_z=args.escala_z)
+    (xn, yn, zn), Tn = info["nucleo"]
+    print(f"Archivo: {ruta}")
+    if plano:
+        print(f"{'Slice' if args.corte else 'Clipping'} con el plano {plano} = {args.pos:g} m")
+    print(f"Núcleo (celda más caliente del hormigón): {Tn:.1f} °C en ({xn:.2f}, {yn:.2f}, {zn:.2f}) m")
+    if info["superficie"]:
+        (xs, ys, zs), Ts = info["superficie"]
+        print(f"Superficie (celda expuesta más fría):     {Ts:.1f} °C en ({xs:.2f}, {ys:.2f}, {zs:.2f}) m")
+    if captura:
+        print(f"Imagen: {captura}")
     return 0
 
 
@@ -838,7 +1044,53 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--salida", help="carpeta de resultados (por defecto la del YAML)")
     s.add_argument("--sin-figuras", action="store_true")
     s.add_argument("--sin-panel", action="store_true", help="no genera panel.html")
+    s.add_argument("--vtk", action="store_true", help="exporta los campos 3D a VTK (.vti + .pvd) para ParaView/PyVista")
+    s.add_argument("--fecha-inicio", help="hora local de la primera vertida, p. ej. 2026-11-27T08:00 (casos con clima)")
+    s.add_argument("--retiro-moldaje", type=float, metavar="H", help="desmolde H horas después de cada colocación")
+    s.add_argument("--sin-moldaje", action="store_true", help="caras laterales desnudas desde la colocación")
+    s.add_argument("--aislacion", metavar="CAPA", help="capa del YAML sobre las caras superiores (o 'ninguna')")
+    s.add_argument("--retiro-aislacion", type=float, metavar="H", help="retiro de la aislación H horas después")
+    s.add_argument("--aislacion-caras", choices=("superiores", "laterales", "todas"), help="dónde va la aislación")
     s.set_defaults(func=cmd_simular3d)
+
+    s = sub.add_parser("clima", help="Clima real: snapshots de Open-Meteo (pronóstico y ERA5) y serie para los bordes")
+    acc = s.add_subparsers(dest="accion", required=True)
+    for nombre, ayuda in (("pronostico", "descarga el pronóstico vigente como snapshot nuevo"),
+                          ("era5", "descarga ERA5 de la misma ventana en años anteriores (climatología)")):
+        a = acc.add_parser(nombre, help=ayuda)
+        a.add_argument("--sitio", default="config/sitio.yaml")
+        a.add_argument("--carpeta", default="data/clima/snapshots")
+        a.add_argument("--indice", default="data/clima/indice.csv")
+        if nombre == "pronostico":
+            a.add_argument("--modelo", default="ecmwf_ifs025", help="modelo de Open-Meteo (ecmwf_ifs025, gfs_seamless...)")
+            a.add_argument("--dias", type=int, default=16)
+        else:
+            a.add_argument("--fecha-inicio", default="2026-11-27T08:00", help="hora local de la primera vertida")
+            a.add_argument("--anios", type=int, nargs=2, default=[2016, 2025], metavar=("DESDE", "HASTA"))
+            a.add_argument("--dias", type=int, default=14)
+            a.add_argument("--margen", type=int, default=7, help="días extra a cada lado de la ventana")
+    a = acc.add_parser("info", help="muestra la metadata de un snapshot (y verifica su SHA-256)")
+    a.add_argument("archivo")
+    a = acc.add_parser("listar", help="lista los snapshots descargados (data/clima/indice.csv)")
+    a.add_argument("--indice", default="data/clima/indice.csv")
+    a = acc.add_parser("serie", help="arma la serie del caso (pronóstico + climatología) y la grafica")
+    a.add_argument("caso", nargs="?", default="config/caso_14d.yaml")
+    a.add_argument("--fecha-inicio")
+    a.add_argument("--duracion", type=float)
+    a.add_argument("--salida", default="resultados/clima")
+    s.set_defaults(func=cmd_clima)
+
+    s = sub.add_parser("vtk", help="Abre resultados VTK con PyVista: slice o clipping, núcleo y superficie")
+    s.add_argument("ruta", help="carpeta vtk/ de una corrida (o un .vti)")
+    s.add_argument("--t", type=float, help="instante [h] (por defecto el último)")
+    s.add_argument("--corte", choices=("x", "y", "z"), help="slice por un plano")
+    s.add_argument("--recorte", choices=("x", "y", "z"), help="clipping: corta y deja ver el interior")
+    s.add_argument("--pos", type=float, default=0.0, help="posición del plano [m]")
+    s.add_argument("--sin-suelo", action="store_true")
+    s.add_argument("--escala-z", type=float, default=1.0, help="exageración vertical de la imagen")
+    s.add_argument("--interactivo", action="store_true", help="abre una ventana para girar la vista")
+    s.add_argument("--captura", help="guarda la vista en este PNG")
+    s.set_defaults(func=cmd_vtk)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

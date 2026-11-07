@@ -1,0 +1,99 @@
+# Caso determinista de 14 días (E10-E12): fundación del IFC, vertidas, hidratación, suelo,
+# moldaje con desmolde y CLIMA REAL de Litueche (Open-Meteo).
+#
+# Diferencias con caso_3d.yaml (E08/E09, que se deja igual para poder reproducir esas entregas):
+#   - el ambiente es una serie horaria real (pronóstico + climatología), no una sinusoide;
+#   - la superficie usa convección con viento + onda larga al cielo + sol (modelo "fisico"),
+#     en vez de un h fijo que lo incluye todo;
+#   - las caras laterales de V1, V2 y V5 tienen moldaje hasta el desmolde (RetiroMoldaje_h del IFC);
+#   - el suelo parte con el perfil de ERA5 y el fondo queda a la temperatura profunda de ERA5;
+#   - Tmin del criterio de ΔT se mide a 25 mm bajo las superficies expuestas.
+#
+# Unidades SI.  [JL19] = Ju y Lei (2019).  [SUPUESTO] = simplificación declarada.
+
+nombre: caso_14d
+
+ifc: ../geometry/foundation.ifc
+
+malla:
+  dx: 0.11          # m: divide las juntas 0,55 / 1,10 / 2,20 / 3,30 m (error de volumen <= 1,1 % por vertida)
+
+# Fecha hipotética de inicio: la defensa final (TBD); el curso menciona el 27 de noviembre.
+fecha_inicio: "2026-11-27T08:00"   # hora local de Litueche (America/Santiago, UTC-3), colocación de la Vertida_01
+
+materiales:
+  hormigon:
+    k: 2.222        # W/(m K)   [JL19]
+    rho: 2400       # kg/m3     [JL19]
+    cp: 970         # J/(kg K)  [JL19]
+    hidratacion:
+      modelo: ju_lei_2019
+      Eh_R: 2400    # K         [JL19, ec. 3]
+      T_ref_C: 20   # °C        [JL19, ec. 3]
+  suelo:
+    k: 1.389        # [JL19]
+    rho: 1800       # [JL19]
+    cp: 1273        # [JL19]
+
+suelo:
+  profundidad: 3.0  # m bajo la base [SUPUESTO]: en 14 días el calor penetra ~0,9 m
+  margen: 2.0       # m de suelo alrededor de la planta; su superficie recibe el mismo clima
+  T_inicial: era5   # perfil inicial T(z) de las capas de suelo de ERA5 (o un número en °C)
+  T_fondo: era5     # Dirichlet a 3 m = temperatura de la capa 100-255 cm de ERA5 (o un número)
+
+clima:
+  pronostico: ultimo     # snapshot de pronóstico más reciente de data/clima/snapshots (o una ruta, o null)
+  climatologia: ultimo   # snapshot ERA5 más reciente (climatología para el horizonte no cubierto)
+  transicion_h: 24       # la anomalía de la última hora del pronóstico decae a 0 en este tiempo
+  ventana_dias: 3        # climatología: misma hora del día, ± 3 días, todos los años del snapshot
+
+superficie:
+  modelo: fisico         # convección h_c(v) + onda larga al cielo + sol (cada mecanismo una sola vez)
+  absortividad: 0.65     # hormigón gris, onda corta [SUPUESTO, rango típico 0,5-0,7]
+  emisividad: 0.9        # hormigón, onda larga
+
+# Catálogo de capas (resistencias en serie; su capacidad térmica se desprecia).
+capas:
+  terciado_18mm: {espesor: 0.018, k: 0.12, absortividad: 0.6, emisividad: 0.9}   # moldaje de terciado fenólico
+  metalico_5mm:  {espesor: 0.005, k: 50.0, absortividad: 0.5, emisividad: 0.3}   # moldaje metálico (R ~ 0)
+  manta_5cm:     {espesor: 0.05,  k: 0.04, absortividad: 0.4, emisividad: 0.9}   # manta de aislación
+
+# El pset del IFC trae Moldaje = "TBD" y Aislacion = "TBD": la decisión queda aquí, a la vista.
+moldaje:
+  capa: terciado_18mm
+  caras: laterales
+  vertidas: [1, 2, 5]    # caras verticales; V3 y V4 son troncos con la cara inclinada (~22°) libre
+  retiro_h: pset         # RetiroMoldaje_h del IFC (72 h) desde la colocación de cada vertida
+
+aislacion:
+  capa: ninguna          # plan base: sin aislación. Para probar:  --aislacion manta_5cm
+  caras: superiores
+  retiro_h: 168
+
+# Cambios a la secuencia del IFC (vacío = 0/6/12/18/24 h y 18 °C, como en el IFC).
+vertidas: {}
+
+tiempo:
+  duracion_h: 336   # 14 días desde la primera vertida
+  factor_seguridad: 0.9
+  dt_max_s: 600     # por precisión (Euler, 1er orden)
+  guardar_cada_h: 1.0
+
+puntos:
+  nucleo_eje:          [0.0, 0.0, 2.15]   # centro del espesor en el eje
+  base_eje:            [0.0, 0.0, 0.10]
+  superficie_pedestal: [0.0, 0.0, 4.25]   # bajo la cara superior del pedestal
+  borde_mitad:         [8.5, 0.0, 0.65]   # junto al moldaje de V1/V2
+  tronco_V4:           [4.5, 0.0, 2.70]   # bajo la cara inclinada
+  suelo_bajo_eje:      [0.0, 0.0, -0.50]
+
+salida:
+  carpeta: ../resultados/caso_14d
+  instantes_3d_h: [12, 24, 48, 72, 96, 120, 168, 240, 336]
+
+criterios:
+  Tmax_C: 70
+  dT_C: 20
+  profundidad_superficie_m: 0.025   # Tmin a 25 mm bajo las superficies expuestas (criterio del curso)
+  superficie_tmin: plana            # puntos representativos: celdas con una sola cara expuesta (sin aristas ni
+                                    # vértices de la escalera de vóxeles); la arista más fría se informa aparte

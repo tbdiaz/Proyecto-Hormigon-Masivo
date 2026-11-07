@@ -9,15 +9,16 @@ pero sobre la grilla voxelizada del IFC y con celdas que **aparecen en el tiempo
   conduce, no genera calor y no tiene edad;
 - una cara entre dos celdas que existen conduce; una cara entre una celda que
   existe y una que no (aire, o una vertida que todavía no se coloca) es una
-  superficie expuesta: Robin con el aire, h superior en ±z, h lateral en ±x, ±y;
+  superficie expuesta: q = U (T_eq - T), con el ambiente, el moldaje y la aislación
+  del módulo bordes.py (que también decide cuándo se retiran);
 - el suelo ocupa toda la planta de la grilla bajo z = 0, con T_fondo (Dirichlet)
   en su cara inferior y caras laterales adiabáticas (dominio "lejano").
 
 La secuencia constructiva NO está en el solver: llega como un PlanVertidas
 (Inicio_h y temperatura de colocación de cada vertida), que se arma con el pset
 del IFC y lo que el YAML o la línea de comandos cambien (`aplicar_cambios`).
-El solver sólo integra por tramos entre eventos de colocación y recalcula las
-conductancias cada vez que cambia el conjunto de celdas que existen.
+El solver sólo integra por tramos entre eventos (colocación o retiro de moldaje o
+aislación) y recalcula las conductancias cada vez que cambia la geometría.
 """
 
 import math
@@ -25,6 +26,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
+from .bordes import INF, LAT, SUP, Ambiente, Capa, Cubierta, PlanCubiertas, coeficiente_U
 from .voxelizacion import VACIO, PlanVertidas, Voxelizacion
 
 VACIO_M, SUELO, HORMIGON = 0, 1, 2  # material de cada celda
@@ -116,65 +118,109 @@ def aplicar_cambios(vox: Voxelizacion, cambios: dict | None) -> list[str]:
 # Solver por etapas
 # ---------------------------------------------------------------------------
 
-@dataclass
-class Ambiente:
-    """Condiciones ambientales simplificadas (declaradas en el YAML)."""
+_NORMALES = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]], dtype=float)
 
-    T_amb: object  # °C: número o función de t [s]
-    h_superior: float = 27.8  # W/(m2 K) en caras ±z expuestas
-    h_lateral: float = 27.8  # W/(m2 K) en caras ±x, ±y expuestas (moldaje + aire)
-    T_fondo: float = 15.0  # °C en la cara inferior del suelo (Dirichlet)
 
-    def temperatura(self, t: float) -> float:
-        return float(self.T_amb(t)) if callable(self.T_amb) else float(self.T_amb)
+def _caras_expuestas(activas):
+    """Caras entre una celda que existe y una que no: (celda plana, dirección 0..5, orientación SUP/LAT/INF).
+
+    Las caras en el límite de la grilla no se cuentan (adiabáticas): el hormigón nunca
+    llega ahí, y el suelo es "lejano" a los lados.
+    """
+    indice = np.arange(activas.size).reshape(activas.shape)
+    celdas, direcciones = [], []
+    for eje in range(3):
+        a = [slice(None)] * 3
+        b = [slice(None)] * 3
+        a[eje], b[eje] = slice(None, -1), slice(1, None)
+        a, b = tuple(a), tuple(b)
+        hacia_mas = activas[a] & ~activas[b]  # la celda de abajo expone su cara +eje
+        hacia_menos = activas[b] & ~activas[a]  # la celda de arriba expone su cara -eje
+        celdas += [indice[a][hacia_mas], indice[b][hacia_menos]]
+        direcciones += [np.full(np.count_nonzero(hacia_mas), 2 * eje + 1),
+                        np.full(np.count_nonzero(hacia_menos), 2 * eje)]
+    celda, direccion = np.concatenate(celdas), np.concatenate(direcciones)
+    orientacion = np.where(direccion == 5, SUP, np.where(direccion == 4, INF, LAT))
+    return celda, direccion, orientacion
 
 
 @dataclass
 class _Etapa:
-    activas: np.ndarray  # celdas que existen
+    """Lo que no cambia entre dos eventos (colocación o retiro de una capa)."""
+
+    activas: np.ndarray
     G: list  # conductancia por volumen [W/(m3 K)] entre vecinas, por eje
-    G_aire: np.ndarray  # suma de conductancias a T_amb [W/(m3 K)]
-    G_fondo: np.ndarray  # conductancia a T_fondo [W/(m3 K)]
+    superficie: np.ndarray  # celdas (índice plano) con alguna cara expuesta
+    N: np.ndarray  # (n_superficie, n_categorías): cuántas caras de cada categoría tiene cada celda
+    cat_orientacion: np.ndarray
+    cat_R: np.ndarray  # resistencia de las capas [m²K/W]
+    cat_k: np.ndarray  # k de la celda (hormigón o suelo)
+    cat_alfa: np.ndarray
+    cat_eps: np.ndarray
+    cat_capas: list  # nombre de las capas de cada categoría
+    caras_h: tuple  # (celda, categoría, dirección, plana) de cada cara expuesta de hormigón (para Tmin a 25 mm)
+    fondo: np.ndarray  # celdas del fondo del suelo
+    g_fondo: float  # conductancia por volumen al fondo (media celda Dirichlet)
+    expuesta: np.ndarray  # máscara: hormigón con alguna cara expuesta con h > 0
     dt_critico: float
+    combos: tuple
 
-    @property
-    def diagonal(self) -> np.ndarray:
-        return self.G_aire + self.G_fondo
+    def coeficientes(self, ambiente, t_s, dx):
+        h, T_eq = ambiente.exterior(t_s, self.cat_orientacion, self.cat_alfa, self.cat_eps)
+        return coeficiente_U(h, self.cat_R, dx, self.cat_k), T_eq
 
 
-def _etapa(dom: Dominio, activas, k, C, amb: Ambiente) -> _Etapa:
+def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, k_h, k_s) -> _Etapa:
     dx = dom.dx
-    G, G_aire = [], np.zeros(dom.forma)
+    G = []
+    suma = np.zeros(dom.forma)
     for eje in range(3):
         a = [slice(None)] * 3
         b = [slice(None)] * 3
         a[eje], b[eje] = slice(None, -1), slice(1, None)
         a, b = tuple(a), tuple(b)
         ambas = activas[a] & activas[b]
-        k_cara = np.where(ambas, 2 * k[a] * k[b] / np.maximum(k[a] + k[b], 1e-30), 0.0)
-        G.append(k_cara / dx**2)
-        # Caras expuestas: una celda activa con la vecina inexistente.
-        h = amb.h_superior if eje == 2 else amb.h_lateral
-        if h > 0:
-            for lado, otro in ((a, b), (b, a)):
-                expuesta = activas[lado] & ~activas[otro]
-                h_ef = 1.0 / (1.0 / h + dx / (2 * np.where(expuesta, k[lado], 1.0)))
-                G_aire[lado] += np.where(expuesta, h_ef / dx, 0.0)
-        # Las caras en el límite de la grilla son adiabáticas, salvo el fondo del suelo.
-    G_fondo = np.zeros(dom.forma)
-    fondo = activas[:, :, 0] & (dom.material[:, :, 0] == SUELO)
-    G_fondo[:, :, 0] = np.where(fondo, 2 * k[:, :, 0] / dx**2, 0.0)
+        g = np.where(ambas, 2 * k[a] * k[b] / np.maximum(k[a] + k[b], 1e-30), 0.0) / dx**2
+        G.append(g)
+        suma[a] += g
+        suma[b] += g
 
-    suma = G_aire + G_fondo
-    for eje, g in enumerate(G):
-        a = [slice(None)] * 3
-        b = [slice(None)] * 3
-        a[eje], b[eje] = slice(None, -1), slice(1, None)
-        suma[tuple(a)] += g
-        suma[tuple(b)] += g
+    celda, direccion, orientacion = _caras_expuestas(activas)
+    material = dom.material.reshape(-1)[celda]
+    combo = tabla[dom.vertida_id.reshape(-1)[celda].astype(np.int64), orientacion]
+    claves, categoria = np.unique(np.stack([orientacion, combo, material], axis=1), axis=0, return_inverse=True)
+    categoria = categoria.reshape(-1)
+    capas = [combos[c] for c in claves[:, 1]]
+    cat_k = np.where(claves[:, 2] == HORMIGON, k_h, k_s).astype(float)
+    cat_R = np.array([sum(c.R for c in cs) for cs in capas], dtype=float)
+    cat_alfa = np.array([cs[-1].absortividad if cs else amb.absortividad for cs in capas], dtype=float)
+    cat_eps = np.array([cs[-1].emisividad if cs else amb.emisividad for cs in capas], dtype=float)
+    superficie, fila = np.unique(celda, return_inverse=True)
+    N = np.zeros((len(superficie), len(claves)))
+    np.add.at(N, (fila.reshape(-1), categoria), 1.0)
+
+    U_max = coeficiente_U(amb.h_maximo(claves[:, 0], cat_eps), cat_R, dx, cat_k)
+    suma.reshape(-1)[superficie] += N @ (U_max / dx)
+    fondo = np.flatnonzero((activas & (dom.material == SUELO))[:, :, 0])
+    fondo = np.ravel_multi_index(np.unravel_index(fondo, dom.forma[:2]) + (np.zeros_like(fondo),), dom.forma)
+    g_fondo = 2 * k_s / dx**2
+    suma.reshape(-1)[fondo] += g_fondo
+
+    expuesta = np.zeros(dom.forma, dtype=bool)
+    con_h = (N @ (U_max > 0)) > 0
+    expuesta.reshape(-1)[superficie[con_h]] = True
+    expuesta &= dom.material == HORMIGON
+    de_hormigon = material == HORMIGON
+    # Cara "plana": su celda tiene una sola cara expuesta (no es arista ni vértice de la escalera de vóxeles).
+    plana = (N.sum(axis=1) == 1)[fila.reshape(-1)]
     coef = np.where(activas, suma / C, 0.0)
-    dt_crit = 1.0 / coef.max() if coef.max() > 0 else math.inf
-    return _Etapa(activas, G, G_aire, G_fondo, dt_crit)
+    return _Etapa(
+        activas=activas.copy(), G=G, superficie=superficie, N=N, cat_orientacion=claves[:, 0], cat_R=cat_R,
+        cat_k=cat_k, cat_alfa=cat_alfa, cat_eps=cat_eps, cat_capas=[[c.nombre for c in cs] for cs in capas],
+        caras_h=(celda[de_hormigon], categoria[de_hormigon], direccion[de_hormigon], plana[de_hormigon]), fondo=fondo,
+        g_fondo=g_fondo, expuesta=expuesta, dt_critico=1.0 / coef.max() if coef.max() > 0 else math.inf,
+        combos=tuple(tuple(c.nombre for c in cs) for cs in combos),
+    )
 
 
 @dataclass
@@ -184,22 +230,35 @@ class Resultado3D:
     t_h: np.ndarray  # instantes guardados [h]
     Tmax: np.ndarray  # máx. en el hormigón existente [°C]
     Tmax_pos: np.ndarray  # (n, 3) posición de Tmax [m]
-    Tmin_sup: np.ndarray  # mín. en celdas de hormigón con alguna cara expuesta [°C]
+    Tmin_sup: np.ndarray  # mín. en la superficie del hormigón [°C] (a `profundidad_tmin` o en el centro de la celda)
     Tmax_vertida: np.ndarray  # (n, n_vertidas) [°C], NaN si no existe
     Tmedia_vertida: np.ndarray  # (n, n_vertidas)
     puntos: dict  # nombre -> T(t) [°C] (NaN mientras la celda no existe)
     posiciones: dict  # nombre -> (x, y, z) del centro de la celda usada
-    T_amb: np.ndarray  # temperatura ambiente [°C]
+    T_amb: np.ndarray  # temperatura del aire [°C]
     corte_y0: np.ndarray  # (n, nx, nz) corte vertical y = 0, NaN fuera del sólido
     campos: dict  # t_h -> campo 3D float32 (NaN donde no hay material) en los instantes elegidos y el de la Tmax
     edades: dict  # t_h -> te [h] (float32) en los mismos instantes
     dts: list = field(default_factory=list)  # (t_inicio_h, dt [s], dt_critico [s]) por tramo
     etapas: list = field(default_factory=list)  # (t_h, vertidas colocadas, dt_critico [s]) al cambiar las celdas
-    eventos: list = field(default_factory=list)
+    eventos: list = field(default_factory=list)  # colocaciones (t_h, v, nombre, T_colocación)
+    retiros: list = field(default_factory=list)  # (t_h, descripción) de moldajes y aislaciones retirados
+    Tmin_pos: np.ndarray | None = None  # (n, 3) dónde está Tmin [m]
+    profundidad_tmin: float | None = None  # None = centro de la celda de superficie
+    superficie_tmin: str = "todas"  # "plana": sólo caras de celdas con una única cara expuesta
+    Tmin_todas: np.ndarray | None = None  # Tmin contando aristas y vértices (dato complementario)
+    Tmin_todas_pos: np.ndarray | None = None
 
     @property
     def dT(self) -> np.ndarray:
         return self.Tmax - self.Tmin_sup
+
+    @property
+    def criterio_Tmin(self) -> str:
+        if self.profundidad_tmin is None:
+            return "Tmin en el centro de las celdas de superficie"
+        donde = "caras planas (sin aristas ni vértices)" if self.superficie_tmin == "plana" else "todas las caras"
+        return f"Tmin a {self.profundidad_tmin * 1000:g} mm bajo las superficies expuestas, en {donde}"
 
 
 def simular_3d(
@@ -210,7 +269,7 @@ def simular_3d(
     hidratacion,
     ambiente: Ambiente,
     duracion_h: float,
-    T_suelo_inicial: float = 15.0,
+    T_suelo_inicial=15.0,
     guardar_cada_h: float = 1.0,
     dt_max_s: float | None = 600.0,
     factor_seguridad: float = 0.9,
@@ -218,20 +277,36 @@ def simular_3d(
     instantes_3d_h=(),
     informar=None,
     observador=None,
+    cubiertas: PlanCubiertas | None = None,
+    profundidad_tmin: float | None = None,
+    superficie_tmin: str = "todas",
 ) -> Resultado3D:
-    """Integra la fundación por etapas: entre eventos de colocación las celdas que existen no cambian.
+    """Integra la fundación por etapas: entre eventos (colocación o retiro de una capa) la geometría no cambia.
 
+    T_suelo_inicial: número o función de z [m] (perfil inicial del suelo).
+    cubiertas: moldaje y aislación con su retiro (bordes.PlanCubiertas).
+    profundidad_tmin: si se indica (p. ej. 0,025 m), Tmin se evalúa a esa profundidad bajo cada
+    cara expuesta, interpolando entre la superficie (por continuidad del flujo) y el centro de la celda.
+    superficie_tmin: "plana" toma Tmin sólo en caras de celdas con una única cara expuesta (puntos
+    representativos de una superficie); "todas" incluye aristas y vértices. Tmin_todas siempre se registra.
     observador(t_h, T, activas), si se indica, se llama en cada instante guardado (ver panel.Recolector).
     """
     forma = dom.forma
+    dx = dom.dx
+    cubiertas = cubiertas or PlanCubiertas()
     es_h = dom.material == HORMIGON
     es_s = dom.material == SUELO
     k = np.where(es_h, hormigon.k, np.where(es_s, suelo.k, 1.0))
     C = np.where(es_h, hormigon.capacidad, np.where(es_s, suelo.capacidad, 1.0))
-    T = np.where(es_s, T_suelo_inicial, np.nan)
+    zc = dom.centros(2)
+    perfil = T_suelo_inicial(zc) if callable(T_suelo_inicial) else np.full(zc.shape, float(T_suelo_inicial))
+    T = np.where(es_s, np.broadcast_to(perfil, forma), np.nan)
     edad = np.zeros(forma)
+    if superficie_tmin not in ("plana", "todas"):
+        raise ValueError("superficie_tmin debe ser 'plana' o 'todas'")
+    if profundidad_tmin is not None and not 0 <= profundidad_tmin <= dx / 2:
+        raise ValueError(f"profundidad_tmin debe estar entre 0 y dx/2 = {dx / 2:g} m")
 
-    # La vertida de cada celda en el dominio (con el relleno de suelo y margen).
     vox_id = dom.vertida_id
     activas = es_s.copy()
     ids_h = np.flatnonzero(es_h)  # sólo estas celdas hidratan: se trabaja sobre ellas
@@ -244,26 +319,61 @@ def simular_3d(
     j0 = int(np.argmin(np.abs(dom.centros(1))))
     nv = dom.vox.n_vertidas
     mascaras_v = [vox_id == v for v in range(1, nv + 1)]
-    expuesta = np.zeros(forma, dtype=bool)
+    centros = [dom.centros(e) for e in range(3)]
 
-    reg = {k_: [] for k_ in ("t", "Tmax", "pos", "Tmin", "Tmaxv", "Tmedv", "amb", "corte")}
+    reg = {k_: [] for k_ in ("t", "Tmax", "pos", "Tmin", "pos_min", "Tmin_t", "pos_min_t", "Tmaxv", "Tmedv", "amb",
+                             "corte")}
     reg_p = {n: [] for n in puntos}
-    campos, edades, dts, eventos, etapas = {}, {}, [], [], []
+    campos, edades, dts, eventos, etapas, retiros = {}, {}, [], [], [], []
     mayor = {"T": -np.inf}
+
+    def posicion(c):
+        i = np.unravel_index(c, forma)
+        return np.array([centros[e][i[e]] for e in range(3)])
+
+    def superficie_fria(t_h):
+        """(Tmin, posición) del criterio y (Tmin, posición) contando aristas, en el hormigón que existe."""
+        nada = (np.nan, [np.nan] * 3)
+        if profundidad_tmin is None:
+            sup = activas & es_h & etapa.expuesta
+            if not sup.any():
+                return nada, nada
+            Ts = np.where(sup, T, np.inf)
+            c = int(np.argmin(Ts))
+            r = (float(Ts.reshape(-1)[c]), posicion(c).tolist())
+            return r, r
+        celda, cat, direccion, plana = etapa.caras_h
+        if len(celda) == 0:
+            return nada, nada
+        U, T_eq = etapa.coeficientes(ambiente, t_h * 3600.0, dx)
+        Tc = T.reshape(-1)[celda]
+        # Perfil lineal en la media celda: flujo q = U (T_eq - Tc) entra por la cara; a la profundidad p:
+        # T(p) = Tc + q (dx/2 - p) / k.  (p = 0 es la superficie del hormigón, bajo el moldaje si lo hay.)
+        T25 = Tc + U[cat] * (T_eq[cat] - Tc) * (dx / 2 - profundidad_tmin) / hormigon.k
+
+        def en(f):
+            return float(T25[f]), (posicion(celda[f]) + _NORMALES[direccion[f]] * (dx / 2 - profundidad_tmin)).tolist()
+
+        todas = en(int(np.argmin(T25)))
+        if superficie_tmin == "plana" and plana.any():
+            return en(int(np.flatnonzero(plana)[np.argmin(T25[plana])])), todas
+        return todas, todas
 
     def registrar(t_h):
         h_act = activas & es_h
         Th = np.where(h_act, T, -np.inf)
         if h_act.any():
-            i = np.unravel_index(int(np.argmax(Th)), forma)
-            reg["Tmax"].append(float(Th[i]))
-            reg["pos"].append([float(dom.centros(e)[i[e]]) for e in range(3)])
-            sup = h_act & expuesta
-            reg["Tmin"].append(float(T[sup].min()) if sup.any() else np.nan)
+            c = int(np.argmax(Th))
+            reg["Tmax"].append(float(Th.reshape(-1)[c]))
+            reg["pos"].append(posicion(c).tolist())
         else:
             reg["Tmax"].append(np.nan)
             reg["pos"].append([np.nan] * 3)
-            reg["Tmin"].append(np.nan)
+        (Tmin, pos_min), (Tmin_t, pos_min_t) = superficie_fria(t_h)
+        reg["Tmin"].append(Tmin)
+        reg["pos_min"].append(pos_min)
+        reg["Tmin_t"].append(Tmin_t)
+        reg["pos_min_t"].append(pos_min_t)
         reg["Tmaxv"].append([float(T[m & activas].max()) if (m & activas).any() else np.nan for m in mascaras_v])
         reg["Tmedv"].append([float(T[m & activas].mean()) if (m & activas).any() else np.nan for m in mascaras_v])
         reg["t"].append(t_h)
@@ -281,13 +391,15 @@ def simular_3d(
             campos[t_h] = np.where(activas, T, np.nan).astype(np.float32)
             edades[t_h] = np.where(activas & es_h, edad, np.nan).astype(np.float32)
 
-    # Instantes de guardado y de colocación: la integración avanza de uno a otro.
+    # Instantes de guardado, colocaciones y retiros: la integración avanza de uno a otro.
     n_g = max(1, math.ceil(duracion_h / guardar_cada_h - 1e-9))
     guardados = [min(i * guardar_cada_h, duracion_h) for i in range(n_g + 1)]
-    colocaciones = sorted({t for t, *_ in plan.eventos() if 0 <= t <= duracion_h})
-    hitos = sorted(set(guardados) | set(colocaciones))
+    colocaciones = {t for t, *_ in plan.eventos() if 0 <= t <= duracion_h}
+    retiros_plan = [(t, d) for t, d in cubiertas.eventos(plan.inicio_h) if 0 <= t <= duracion_h]
+    hitos = sorted(set(guardados) | colocaciones | {t for t, _ in retiros_plan})
 
     etapa = None
+    tabla_actual = None
     t_prev = -1.0
     for n_hito, t_h in enumerate(hitos):
         if n_hito > 0:  # integrar desde el hito anterior
@@ -307,8 +419,7 @@ def simular_3d(
             T = np.where(activas, T, 0.0)
             Tv, Ev, var_v = T.reshape(-1), edad.reshape(-1), np.empty(T.size)
             var = var_v.reshape(forma)
-            fuente_fija = etapa.G_fondo * ambiente.T_fondo
-            diagonal = etapa.diagonal
+            sup, fondo = etapa.superficie, etapa.fondo
             ids = ids_h[activas.reshape(-1)[ids_h]]  # hormigón que existe
             difs = [np.empty([n - (e == eje) for e, n in enumerate(forma)]) for eje in range(3)]
             cortes = []
@@ -318,11 +429,12 @@ def simular_3d(
                 a[eje], b[eje] = slice(None, -1), slice(1, None)
                 cortes.append((tuple(a), tuple(b)))
             for paso in range(pasos):
-                T_amb = ambiente.temperatura(t0 * 3600 + paso * dt)
-                # Bordes: Robin con el aire y Dirichlet en el fondo del suelo.
-                np.multiply(diagonal, T, out=var)
-                np.subtract(fuente_fija, var, out=var)
-                var += etapa.G_aire * T_amb
+                var.fill(0.0)
+                # Bordes al ambiente: q = U (T_eq - T) por cada cara expuesta, agrupadas por categoría.
+                U, T_eq = etapa.coeficientes(ambiente, t0 * 3600 + paso * dt, dx)
+                var_v[sup] += etapa.N @ (U * T_eq / dx) - (etapa.N @ (U / dx)) * Tv[sup]
+                # Fondo del suelo: Dirichlet a media celda.
+                var_v[fondo] += etapa.g_fondo * (ambiente.T_fondo - Tv[fondo])
                 # Conducción entre vecinas: flujo g (Tb - Ta), igual y opuesto.
                 for (a, b), g, d in zip(cortes, etapa.G, difs):
                     np.subtract(T[b], T[a], out=d)
@@ -344,17 +456,24 @@ def simular_3d(
 
         # Vertidas que se colocan en (t_prev, t_h]: T de colocación y te = 0 (misma regla que PlanVertidas.activar).
         nuevas = [v for v in plan.vertidas_activas(t_h) if plan.inicio_h[v - 1] > t_prev + 1e-9]
-        if nuevas or etapa is None:
-            for v in nuevas:
-                celdas = vox_id == v
-                T[celdas] = plan.T_colocacion[v - 1]
-                edad[celdas] = 0.0
-                activas |= celdas
-                eventos.append((t_h, v, dom.vox.nombres[v - 1], float(plan.T_colocacion[v - 1])))
-            etapa = _etapa(dom, activas, k, C, ambiente)
-            expuesta = etapa.G_aire > 0
+        for v in nuevas:
+            celdas = vox_id == v
+            T[celdas] = plan.T_colocacion[v - 1]
+            edad[celdas] = 0.0
+            activas |= celdas
+            eventos.append((t_h, v, dom.vox.nombres[v - 1], float(plan.T_colocacion[v - 1])))
+        for t_r, d in retiros_plan:
+            if t_prev + 1e-9 < t_r <= t_h + 1e-9:
+                retiros.append((t_r, d))
+                if informar:
+                    informar(f"t = {t_h:6.1f} h: {d}")
+        tabla, combos = cubiertas.tabla(t_h, plan.inicio_h, nv)
+        firma = (tabla.tobytes(), tuple(tuple(c.nombre for c in cs) for cs in combos))
+        if nuevas or etapa is None or firma != tabla_actual:
+            etapa = _etapa(dom, activas, k, C, ambiente, tabla, combos, hormigon.k, suelo.k)
+            tabla_actual = firma
             etapas.append((t_h, plan.vertidas_activas(t_h), float(etapa.dt_critico)))
-            if informar:
+            if informar and (nuevas or n_hito == 0):
                 informar(f"t = {t_h:6.1f} h: activas {plan.vertidas_activas(t_h)}, dt crítico = {etapa.dt_critico:.0f} s")
         t_prev = t_h
         if t_h in guardados:
@@ -369,6 +488,9 @@ def simular_3d(
         Tmin_sup=np.array(reg["Tmin"]), Tmax_vertida=np.array(reg["Tmaxv"]), Tmedia_vertida=np.array(reg["Tmedv"]),
         puntos={n: np.array(v) for n, v in reg_p.items()}, posiciones=posiciones, T_amb=np.array(reg["amb"]),
         corte_y0=np.stack(reg["corte"]), campos=campos, edades=edades, dts=dts, eventos=eventos, etapas=etapas,
+        retiros=retiros, Tmin_pos=np.array(reg["pos_min"]), profundidad_tmin=profundidad_tmin,
+        superficie_tmin=superficie_tmin if profundidad_tmin is not None else "todas",
+        Tmin_todas=np.array(reg["Tmin_t"]), Tmin_todas_pos=np.array(reg["pos_min_t"]),
     )
 
 
@@ -400,6 +522,16 @@ class Caso3D:
     limite_Tmax: float = 70.0
     limite_dT: float = 20.0
     T_amb_texto: str = ""  # cómo se declaró T ambiente en el YAML
+    profundidad_tmin: float | None = None  # criterios.profundidad_superficie_m (None = centro de la celda)
+    superficie_tmin: str = "todas"  # criterios.superficie_tmin: "plana" o "todas"
+    fecha_inicio: str | None = None  # hora local de la colocación de la Vertida_01 (con clima real)
+    clima_cfg: dict | None = None  # sección `clima` del YAML (rutas ya resueltas)
+    superficie_cfg: dict = field(default_factory=dict)
+    capas: dict = field(default_factory=dict)  # catálogo de moldajes y aislaciones
+    cubiertas_cfg: dict = field(default_factory=dict)  # secciones `moldaje` y `aislacion`
+    suelo_cfg: dict = field(default_factory=dict)
+    cubiertas: PlanCubiertas | None = None  # se arma en preparar() (necesita el pset del IFC)
+    clima_info: dict = field(default_factory=dict)
 
 
 def _texto_T_amb(d) -> str:
@@ -408,8 +540,20 @@ def _texto_T_amb(d) -> str:
     return f"T_amb = {d['media']:g} ± {d['amplitud']:g} °C (sinusoide diaria, máx. a las {d['hora_max']:g} h)"
 
 
+def _ruta_o_ultimo(valor, base):
+    """'ultimo' (el snapshot más reciente), null, o una ruta relativa al YAML."""
+    import os
+    from pathlib import Path
+
+    if valor in (None, "ninguno", False):
+        return None
+    if valor == "ultimo":
+        return "ultimo"
+    return Path(os.path.normpath(base / valor))
+
+
 def cargar_caso_3d(ruta) -> Caso3D:
-    """Lee config/caso_3d.yaml (rutas relativas a la carpeta del YAML)."""
+    """Lee un caso 3D (config/caso_3d.yaml, config/caso_14d.yaml); rutas relativas a la carpeta del YAML."""
     import os
     from pathlib import Path
 
@@ -425,9 +569,31 @@ def cargar_caso_3d(ruta) -> Caso3D:
     h = dict(mats["hormigon"].get("hidratacion", {"modelo": "ju_lei_2019"}))
     if h.pop("modelo") != "ju_lei_2019":
         raise ValueError("Modelo de hidratación no implementado")
-    tiempo, amb, suelo, sal = cfg["tiempo"], cfg["ambiente"], cfg.get("suelo", {}), cfg.get("salida", {})
-    hora_inicio = float(tiempo.get("hora_inicio", 0.0))
+    tiempo, suelo, sal = cfg["tiempo"], cfg.get("suelo", {}), cfg.get("salida", {})
+    amb = cfg.get("ambiente", {})
+    fecha = cfg.get("fecha_inicio")
+    hora_inicio = float(tiempo.get("hora_inicio", int(str(fecha)[11:13]) if fecha else 0.0))
     crit = cfg.get("criterios", {})
+    clima_cfg = None
+    if "clima" in cfg:
+        if not fecha:
+            raise ValueError("Con `clima` hay que indicar fecha_inicio (hora local de la primera vertida)")
+        c = dict(cfg["clima"])
+        clima_cfg = {"pronostico": _ruta_o_ultimo(c.get("pronostico", "ultimo"), base),
+                     "climatologia": _ruta_o_ultimo(c.get("climatologia", "ultimo"), base),
+                     "carpeta": Path(os.path.normpath(base / c.get("carpeta", "../data/clima/snapshots"))),
+                     "transicion_h": float(c.get("transicion_h", 24)), "ventana_dias": int(c.get("ventana_dias", 3))}
+    superficie = dict(cfg.get("superficie", {}))
+    capas = {n: Capa(n, float(d["espesor"]), float(d["k"]), float(d.get("absortividad", 0.6)),
+                     float(d.get("emisividad", 0.9))) for n, d in (cfg.get("capas") or {}).items()}
+    T_suelo = suelo.get("T_inicial", 15.0)
+    T_fondo = suelo.get("T_fondo", 15.0)
+    if "T_amb" in amb:
+        ambiente = Ambiente(temperatura_ambiente(amb["T_amb"], hora_inicio), float(amb.get("h_superior", 27.8)),
+                            float(amb.get("h_lateral", 27.8)), float(T_fondo) if T_fondo != "era5" else 15.0)
+        texto = _texto_T_amb(amb["T_amb"])
+    else:
+        ambiente, texto = Ambiente(20.0), "clima real (ver clima_info)"
     return Caso3D(
         nombre=cfg.get("nombre", ruta.stem),
         ifc=Path(os.path.normpath(base / cfg["ifc"])),
@@ -437,9 +603,8 @@ def cargar_caso_3d(ruta) -> Caso3D:
         hidratacion=HidratacionJuLei2019(**h),
         profundidad_suelo=float(suelo.get("profundidad", 3.0)),
         margen_suelo=float(suelo.get("margen", 2.0)),
-        T_suelo_inicial=float(suelo.get("T_inicial", 15.0)),
-        ambiente=Ambiente(temperatura_ambiente(amb["T_amb"], hora_inicio), float(amb.get("h_superior", 27.8)),
-                          float(amb.get("h_lateral", 27.8)), float(suelo.get("T_fondo", 15.0))),
+        T_suelo_inicial=T_suelo if T_suelo == "era5" else float(T_suelo),
+        ambiente=ambiente,
         cambios=dict(cfg.get("vertidas") or {}),
         duracion_h=float(tiempo["duracion_h"]),
         hora_inicio=hora_inicio,
@@ -451,7 +616,13 @@ def cargar_caso_3d(ruta) -> Caso3D:
         salida=Path(os.path.normpath(base / sal.get("carpeta", f"../resultados/{ruta.stem}"))),
         limite_Tmax=float(crit.get("Tmax_C", 70.0)),
         limite_dT=float(crit.get("dT_C", 20.0)),
-        T_amb_texto=_texto_T_amb(amb["T_amb"]),
+        T_amb_texto=texto,
+        profundidad_tmin=None if crit.get("profundidad_superficie_m") is None
+        else float(crit["profundidad_superficie_m"]),
+        superficie_tmin=str(crit.get("superficie_tmin", "todas")),
+        fecha_inicio=None if fecha is None else str(fecha), clima_cfg=clima_cfg, superficie_cfg=superficie,
+        capas=capas, cubiertas_cfg={t: cfg[t] for t in ("moldaje", "aislacion") if cfg.get(t)},
+        suelo_cfg=dict(suelo),
     )
 
 
@@ -466,7 +637,69 @@ def preparar(caso: Caso3D, vertidas_ifc=None):
     vox = voxelizar(vertidas_ifc, caso.dx)
     registro = aplicar_cambios(vox, caso.cambios)
     dom = construir_dominio(vox, caso.profundidad_suelo, caso.margen_suelo)
+    caso.cubiertas = armar_cubiertas(caso, vox)
+    if caso.clima_cfg is not None:
+        preparar_clima(caso)
     return vox, dom, PlanVertidas(vox), registro
+
+
+_CARAS = {"laterales": (LAT,), "superiores": (SUP,), "todas": (SUP, LAT, INF)}
+
+
+def armar_cubiertas(caso: Caso3D, vox: Voxelizacion) -> PlanCubiertas:
+    """Moldaje y aislación del YAML; el retiro puede venir del pset del IFC (RetiroMoldaje_h)."""
+    cubiertas = []
+    for tipo, d in caso.cubiertas_cfg.items():
+        nombre = d.get("capa")
+        if nombre in (None, "ninguna", "ninguno"):
+            continue
+        if nombre not in caso.capas:
+            raise ValueError(f"{tipo}: la capa {nombre!r} no está en la sección `capas` del YAML")
+        vertidas = tuple(int(v) for v in d.get("vertidas", range(1, vox.n_vertidas + 1)))
+        retiro = d.get("retiro_h", "pset" if tipo == "moldaje" else None)
+        if retiro == "pset":
+            retiro_h = {v: float(vox.propiedades[v - 1].get("RetiroMoldaje_h", np.inf)) for v in vertidas}
+        elif retiro in (None, "nunca"):
+            retiro_h = {v: np.inf for v in vertidas}
+        else:
+            retiro_h = {v: float(retiro) for v in vertidas}
+        caras = d.get("caras", "laterales" if tipo == "moldaje" else "superiores")
+        cubiertas.append(Cubierta(tipo, caso.capas[nombre], _CARAS[caras], vertidas, retiro_h))
+    return PlanCubiertas(cubiertas)
+
+
+def preparar_clima(caso: Caso3D) -> None:
+    """Arma la serie horaria del clima (pronóstico + climatología) y el perfil del suelo; deja todo en caso."""
+    from .clima import ensamblar, leer_snapshot, perfil_suelo, ultimo_snapshot
+
+    cfg = caso.clima_cfg
+    rutas = {}
+    for clave, tipo in (("pronostico", "pronostico"), ("climatologia", "reanalisis")):
+        r = cfg[clave]
+        rutas[clave] = ultimo_snapshot(tipo, cfg["carpeta"]) if r == "ultimo" else r
+    snaps = {k: None if r is None else leer_snapshot(r) for k, r in rutas.items()}
+    clima = ensamblar(caso.fecha_inicio, caso.duracion_h, snaps["pronostico"], snaps["climatologia"],
+                      cfg["transicion_h"], cfg["ventana_dias"])
+    sup = caso.superficie_cfg
+    T_fondo = caso.suelo_cfg.get("T_fondo", 15.0)
+    info_suelo = None
+    if snaps["climatologia"] is not None and "era5" in (T_fondo, caso.T_suelo_inicial):
+        perfil, T_prof, info_suelo = perfil_suelo(snaps["climatologia"], caso.fecha_inicio, cfg["ventana_dias"])
+        if caso.T_suelo_inicial == "era5":
+            caso.T_suelo_inicial = perfil
+        if T_fondo == "era5":
+            T_fondo = T_prof
+    if caso.T_suelo_inicial == "era5" or T_fondo == "era5":
+        raise ValueError("El suelo 'era5' necesita un snapshot de climatología ERA5")
+    caso.ambiente = Ambiente(20.0, float(sup.get("h_superior", 27.8)), float(sup.get("h_lateral", 27.8)),
+                             float(T_fondo), modelo=sup.get("modelo", "fisico"), clima=clima,
+                             absortividad=float(sup.get("absortividad", 0.65)),
+                             emisividad=float(sup.get("emisividad", 0.9)))
+    caso.clima_info = {**clima.metadata, "suelo": info_suelo}
+    T = clima.T_aire
+    caso.T_amb_texto = (f"clima real: T aire {T.min():.1f}–{T.max():.1f} °C (media {T.mean():.1f}); "
+                        f"{clima.metadata['horas_pronostico']} h de pronóstico, "
+                        f"{clima.metadata['horas_climatologia']} h de climatología")
 
 
 def simular_caso_3d(caso: Caso3D, vertidas_ifc=None, informar=None):
@@ -475,6 +708,7 @@ def simular_caso_3d(caso: Caso3D, vertidas_ifc=None, informar=None):
         dom, plan, caso.hormigon, caso.suelo, caso.hidratacion, caso.ambiente, caso.duracion_h,
         T_suelo_inicial=caso.T_suelo_inicial, guardar_cada_h=caso.guardar_cada_h, dt_max_s=caso.dt_max_s,
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
-        informar=informar,
+        informar=informar, cubiertas=caso.cubiertas, profundidad_tmin=caso.profundidad_tmin,
+        superficie_tmin=caso.superficie_tmin,
     )
     return res, registro

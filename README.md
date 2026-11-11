@@ -40,11 +40,17 @@ python3 -m venv .venv
 Luego se activa el entorno (`.venv\Scripts\Activate.ps1` o `source .venv/bin/activate`) o se
 llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz del repositorio.
 
+## Editor sin terminal
+
+Doble clic en **`abrir_editor.bat`** (o `mcplan editor`): se abre en el navegador un formulario para cambiar Δx,
+duración, fecha, vertidas, moldaje, aislación y materiales, y simular con un botón. Los resultados aparecen al lado
+y cada corrida queda en `resultados/editor/`. No modifica los YAML ni el IFC.
+
 ## Uso rápido
 
 ```powershell
-pytest                                            # 136 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
-pytest -m "not lento"                             # la batería rápida (132 tests, ~1 min)
+pytest                                            # 145 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
+pytest -m "not lento"                             # la batería rápida (141 tests, ~1 min)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
@@ -209,6 +215,7 @@ src/mcplan/
   vtk_io.py          exportación VTK (.vti/.pvd) para ParaView y vista con PyVista (slice, clipping)
   vista3d.py         vista 3D con un cuarto cortado (PNG)
   panel.py, panel.html  panel interactivo de cada corrida: Δx, Δt, β de los bordes, vista 3D, cortes y curvas
+  servidor.py, editor.html  editor local: formulario que corre `simular3d` y muestra el panel
   graficos.py        figuras (Matplotlib)
   cli.py             comando `mcplan`
 tests/               tests automatizados (pytest)
@@ -246,7 +253,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 136 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 145 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |

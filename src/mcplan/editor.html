@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Editor térmico 3D</title>
+<link rel="icon" href="data:,">
+<style>
+:root {
+  color-scheme: light;
+  --fondo: #f4f4f2; --tarjeta: #fcfcfb; --linea: #dddcd7; --texto: #0b0b0b; --texto2: #52514e; --texto3: #76756f;
+  --acento: #2a78d6; --mal: #b3261e; --aviso: #8a5a00; --fondo-mal: #fbeaea; --fondo-aviso: #fdf3dc; --cambio: #e4effb;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --fondo: #111110; --tarjeta: #1a1a19; --linea: #34332f; --texto: #f0efec; --texto2: #c3c2b7; --texto3: #9a998f;
+    --acento: #3987e5; --mal: #f28b82; --aviso: #f2c063; --fondo-mal: #3a1f1d; --fondo-aviso: #3a2d12; --cambio: #1d3350;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--fondo); color: var(--texto); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
+.app { display: grid; grid-template-columns: 370px minmax(0, 1fr); height: 100%; }
+aside { display: flex; flex-direction: column; min-height: 0; background: var(--tarjeta); border-right: 1px solid var(--linea); }
+header { padding: 14px 16px 10px; border-bottom: 1px solid var(--linea); }
+h1 { font-size: 17px; margin: 0 0 8px; font-weight: 650; }
+.campos { flex: 1; overflow-y: auto; padding: 4px 16px 12px; }
+fieldset { border: 0; border-bottom: 1px solid var(--linea); margin: 0; padding: 12px 0; }
+fieldset:last-child { border-bottom: 0; }
+legend { font-weight: 650; padding: 0; float: left; width: 100%; margin-bottom: 8px; }
+legend + * { clear: both; }
+.par { display: grid; grid-template-columns: 1fr 112px; align-items: center; gap: 8px; margin-bottom: 6px; }
+.par.ancho { grid-template-columns: 1fr 190px; }
+label { color: var(--texto2); }
+.unidad { color: var(--texto3); font-size: 12px; }
+input[type=number], input[type=datetime-local], select { width: 100%; font: inherit; color: var(--texto); background: var(--fondo); border: 1px solid var(--linea); border-radius: 5px; padding: 4px 6px; min-height: 30px; }
+input.cambiado, select.cambiado { background: var(--cambio); border-color: var(--acento); }
+input:disabled { opacity: .45; }
+:focus-visible { outline: 2px solid var(--acento); outline-offset: 1px; }
+table { width: 100%; border-collapse: collapse; }
+th { text-align: left; color: var(--texto2); font-weight: 600; font-size: 12.5px; padding: 0 4px 4px 0; }
+td { padding: 2px 4px 2px 0; }
+td:first-child { white-space: nowrap; }
+.check { display: inline-flex; align-items: center; gap: 6px; color: var(--texto); cursor: pointer; }
+.nota { color: var(--texto3); font-size: 12.5px; margin: 4px 0 0; }
+footer { border-top: 1px solid var(--linea); padding: 10px 16px 12px; }
+.estimacion { color: var(--texto2); font-size: 12.5px; margin-bottom: 6px; }
+.alerta { font-size: 12.5px; padding: 6px 8px; border-radius: 5px; margin-bottom: 8px; }
+.alerta.aviso { color: var(--aviso); background: var(--fondo-aviso); }
+.alerta.error { color: var(--mal); background: var(--fondo-mal); }
+.botones { display: flex; gap: 8px; }
+button { font: inherit; color: var(--texto); background: var(--tarjeta); border: 1px solid var(--linea); border-radius: 6px; padding: 6px 12px; min-height: 34px; cursor: pointer; }
+button:hover { border-color: var(--texto3); }
+button.principal { flex: 1; background: var(--acento); border-color: var(--acento); color: #fff; font-weight: 600; }
+button:disabled { opacity: .5; cursor: default; }
+main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.barra { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; padding: 10px 14px; background: var(--tarjeta); border-bottom: 1px solid var(--linea); }
+.barra select { width: auto; max-width: 100%; flex: 0 1 460px; }
+#estado { flex: 1 1 220px; color: var(--texto2); }
+progress { width: 100%; height: 6px; display: block; accent-color: var(--acento); }
+details { background: var(--tarjeta); border-bottom: 1px solid var(--linea); padding: 6px 14px; }
+summary { cursor: pointer; color: var(--texto2); }
+pre { max-height: 220px; overflow: auto; font: 12px/1.4 ui-monospace, Consolas, monospace; margin: 6px 0; white-space: pre-wrap; }
+iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--fondo); }
+.vacio { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--texto2); padding: 24px; }
+[hidden] { display: none !important; }
+@media (max-width: 800px) {
+  html, body { height: auto; }
+  .app { display: block; height: auto; }
+  aside { border-right: 0; border-bottom: 1px solid var(--linea); }
+  .campos { overflow: visible; }
+  iframe { height: 80vh; flex: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside>
+    <header>
+      <h1>Editor de la simulación</h1>
+      <div class="par ancho" style="margin:0"><label for="caso">Caso</label><select id="caso"></select></div>
+    </header>
+    <form class="campos" id="form" autocomplete="off"></form>
+    <footer>
+      <div class="estimacion" id="estimacion"></div>
+      <div class="alerta aviso" id="aviso" hidden></div>
+      <div class="alerta error" id="error" role="alert" hidden></div>
+      <label class="check" style="margin-bottom:8px"><input type="checkbox" id="archivos"> Guardar también figuras PNG y VTK</label>
+      <div class="botones">
+        <button class="principal" id="simular" type="button">Simular</button>
+        <button id="cancelar" type="button" hidden>Cancelar</button>
+        <button id="restablecer" type="button">Restablecer</button>
+      </div>
+    </footer>
+  </aside>
+  <main>
+    <div class="barra">
+      <div id="estado" role="status">Cambia los datos y aprieta Simular.</div>
+      <label for="corridas">Corridas</label>
+      <select id="corridas"></select>
+    </div>
+    <progress id="avance" max="1" value="0" hidden></progress>
+    <details id="detalle" hidden><summary>Detalle de la corrida</summary><pre id="log"></pre></details>
+    <div class="vacio" id="vacio">Aquí aparecerán los resultados: vista 3D, cortes, curvas y condiciones de borde.</div>
+    <iframe id="panel" title="Resultados de la simulación" hidden></iframe>
+  </main>
+</div>
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+let base = null, sondeo = null;
+const fmt = (x, d = 1) => x.toLocaleString("es-CL", { minimumFractionDigits: d, maximumFractionDigits: d });
+
+async function api(ruta, datos) {
+  const r = await fetch(ruta, datos === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(datos) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || "Error del servidor");
+  return j;
+}
+function el(tag, props = {}, ...hijos) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) k in e ? e[k] = v : e.setAttribute(k, v);
+  e.append(...hijos);
+  return e;
+}
+function campoNumero(id, valor, min, max, paso) {
+  return el("input", { id, type: "number", value: valor ?? "", min, max, step: paso });
+}
+function par(etiqueta, unidad, control) {
+  const l = el("label", { htmlFor: control.id }, etiqueta, unidad ? el("span", { className: "unidad" }, ` [${unidad}]`) : "");
+  return el("div", { className: "par" }, l, control);
+}
+function grupo(titulo, ...hijos) { return el("fieldset", {}, el("legend", {}, titulo), ...hijos); }
+
+function construir() {
+  const b = base, f = $("form");
+  f.replaceChildren();
+  const tiempo = [par("Δx = Δy = Δz", "m", campoNumero("dx", b.dx, 0.05, 2, 0.005)),
+    par("Duración", "h", campoNumero("duracion_h", b.duracion_h, 1, 720, 1)),
+    par("Δt máximo", "s", campoNumero("dt_max_s", b.dt_max_s, 10, 3600, 10))];
+  if (b.con_clima) {
+    const fecha = el("input", { id: "fecha_inicio", type: "datetime-local", value: b.fecha_inicio });
+    const fila = el("div", { className: "par ancho" }, el("label", { htmlFor: "fecha_inicio" }, "Primera vertida"), fecha);
+    tiempo.push(fila, el("p", { className: "nota" }, `Datos disponibles: ${b.cobertura}.`));
+  }
+  f.append(grupo("Malla y tiempo", ...tiempo));
+
+  const filas = b.vertidas.map(v => {
+    const activa = el("input", { type: "checkbox", id: `v${v.id}_activa`, checked: v.activa });
+    const inicio = campoNumero(`v${v.id}_inicio`, v.inicio_h, 0, 720, 1), T = campoNumero(`v${v.id}_T`, v.T_colocacion, -5, 45, 0.5);
+    inicio.setAttribute("aria-label", `${v.nombre}: inicio en horas`);
+    T.setAttribute("aria-label", `${v.nombre}: temperatura de colocación`);
+    const actualizar = () => { inicio.disabled = T.disabled = !activa.checked; };
+    activa.addEventListener("change", actualizar); actualizar();
+    return el("tr", {}, el("td", {}, el("label", { className: "check" }, activa, v.nombre.replace("Vertida_0", "V"))), el("td", {}, inicio), el("td", {}, T));
+  });
+  f.append(grupo("Vertidas", el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Construir"), el("th", {}, "Inicio [h]"), el("th", {}, "T col. [°C]"))), el("tbody", {}, ...filas))));
+
+  if (b.moldaje) {
+    const usar = el("input", { type: "checkbox", id: "moldaje_usar", checked: b.moldaje.usar });
+    const retiro = campoNumero("moldaje_retiro", b.moldaje.retiro_h, 0, 2000, 1);
+    usar.addEventListener("change", () => { retiro.disabled = !usar.checked; });
+    retiro.disabled = !usar.checked;
+    const capa = el("select", { id: "aislacion_capa" }, el("option", { value: "ninguna" }, "Sin aislación"), ...b.capas.map(c => el("option", { value: c }, c.replaceAll("_", " "))));
+    capa.value = b.aislacion.capa;
+    const caras = el("select", { id: "aislacion_caras" }, ...["superiores", "laterales", "todas"].map(c => el("option", { value: c }, c)));
+    caras.value = b.aislacion.caras;
+    const retiroA = campoNumero("aislacion_retiro", b.aislacion.retiro_h, 0, 2000, 1);
+    const actualizar = () => { caras.disabled = retiroA.disabled = capa.value === "ninguna"; };
+    capa.addEventListener("change", actualizar); actualizar();
+    f.append(grupo("Moldaje y aislación",
+      el("div", { className: "par" }, el("label", { className: "check" }, usar, `Moldaje (${b.moldaje.capa.replaceAll("_", " ")})`), el("span")),
+      par("Retiro tras colocar", "h", retiro),
+      el("div", { className: "par ancho" }, el("label", { htmlFor: "aislacion_capa" }, "Aislación"), capa),
+      el("div", { className: "par ancho" }, el("label", { htmlFor: "aislacion_caras" }, "Caras"), caras),
+      par("Retiro aislación", "h", retiroA)));
+  }
+  const superficie = b.modelo === "combinado"
+    ? [par("h caras ±z", "W/m²K", campoNumero("h_superior", b.h_superior, 0, 200, 0.1)), par("h caras laterales", "W/m²K", campoNumero("h_lateral", b.h_lateral, 0, 200, 0.1))]
+    : [par("Absortividad α", "", campoNumero("absortividad", b.absortividad, 0, 1, 0.01)), par("Emisividad ε", "", campoNumero("emisividad", b.emisividad, 0, 1, 0.01))];
+  f.append(grupo("Superficie y materiales", ...superficie,
+    par("k hormigón", "W/mK", campoNumero("k_hormigon", b.k_hormigon, 0.1, 10, 0.001)),
+    par("k suelo", "W/mK", campoNumero("k_suelo", b.k_suelo, 0.05, 10, 0.001))));
+  for (const c of f.querySelectorAll("input,select")) c.dataset.inicial = valorDe(c);
+  marcar();
+}
+const valorDe = c => c.type === "checkbox" ? String(c.checked) : c.value;
+const numero = id => $(id) ? $(id).value : undefined;
+
+function leerForm() {
+  const b = base, datos = { caso: b.caso, archivos: $("archivos").checked, dx: numero("dx"), duracion_h: numero("duracion_h"), dt_max_s: numero("dt_max_s"),
+    k_hormigon: numero("k_hormigon"), k_suelo: numero("k_suelo"), h_superior: numero("h_superior"), h_lateral: numero("h_lateral"),
+    absortividad: numero("absortividad"), emisividad: numero("emisividad"), fecha_inicio: numero("fecha_inicio")?.slice(0, 16),
+    vertidas: b.vertidas.map(v => ({ activa: $(`v${v.id}_activa`).checked, inicio_h: numero(`v${v.id}_inicio`), T_colocacion: numero(`v${v.id}_T`) })) };
+  if (b.moldaje) {
+    datos.moldaje = { usar: $("moldaje_usar").checked, retiro_h: numero("moldaje_retiro") };
+    datos.aislacion = { capa: $("aislacion_capa").value, caras: $("aislacion_caras").value, retiro_h: numero("aislacion_retiro") };
+  }
+  return datos;
+}
+function marcar() {
+  let n = 0;
+  for (const c of $("form").querySelectorAll("input,select")) {
+    const cambio = valorDe(c) !== c.dataset.inicial;
+    c.classList.toggle("cambiado", cambio);
+    if (cambio) n++;
+  }
+  // Estimación escalada desde la corrida medida: dx = 0,11 m, 336 h, Δt = 600 s, 5 min y 650 MB.
+  const dx = +numero("dx"), dur = +numero("duracion_h"), dtMax = +numero("dt_max_s");
+  if (!(dx > 0 && dur > 0 && dtMax > 0)) { $("estimacion").textContent = ""; return; }
+  const plan = 18 + 2 * base.margen_suelo + 2 * dx, alto = 4.3 + base.profundidad_suelo + 2 * dx;
+  const celdas = (plan / dx) ** 2 * (alto / dx), dt = Math.min(0.9 * 2113 * (dx / 0.11) ** 2, dtMax);
+  const segundos = 5 + 310 * celdas / 2.77e6 * (dur * 3600 / dt) / 2016, gb = celdas * 235 / 1e9;
+  const tiempo = segundos < 90 ? `${Math.ceil(segundos / 5) * 5} s` : `${Math.round(segundos / 60)} min`;
+  $("estimacion").textContent = `${n ? n + (n === 1 ? " cambio · " : " cambios · ") : ""}≈ ${Math.round(celdas).toLocaleString("es-CL")} celdas · ≈ ${tiempo} · ≈ ${fmt(gb)} GB de RAM`;
+  const aviso = $("aviso");
+  aviso.hidden = gb < 3;
+  aviso.textContent = gb >= 3 ? "Esta malla usa mucha memoria y puede poner lento el computador. Prueba primero con un Δx mayor." : "";
+}
+$("form").addEventListener("input", marcar);
+$("form").addEventListener("change", marcar);
+$("form").addEventListener("submit", e => e.preventDefault());
+
+function mostrarError(texto) { $("error").textContent = texto; $("error").hidden = !texto; }
+function abrirCorrida(id) {
+  $("vacio").hidden = true;
+  $("panel").hidden = false;
+  $("panel").src = `/resultados/${id}/panel.html`;
+}
+async function cargarCorridas(seleccion) {
+  const { corridas } = await api("/api/corridas"), s = $("corridas");
+  s.replaceChildren(...corridas.map(c => el("option", { value: c.id },
+    `${c.id.slice(6, 8)}/${c.id.slice(4, 6)} ${c.id.slice(9, 11)}:${c.id.slice(11, 13)} · ${c.caso} · Δx ${fmt(c.dx, 3)} · ${fmt(c.duracion_h, 0)} h · Tmax ${fmt(c.Tmax)} · ΔT ${fmt(c.dT)}`)));
+  if (!corridas.length) s.append(el("option", { value: "" }, "Sin corridas todavía"));
+  if (seleccion) s.value = seleccion;
+  return corridas;
+}
+$("corridas").addEventListener("change", e => { if (e.target.value) abrirCorrida(e.target.value); });
+
+function pintarEstado(j) {
+  const corriendo = j.estado === "corriendo";
+  $("simular").disabled = corriendo;
+  $("simular").textContent = corriendo ? "Simulando…" : "Simular";
+  $("cancelar").hidden = !corriendo;
+  $("avance").hidden = !corriendo;
+  if (j.avance) { $("avance").max = j.avance[1]; $("avance").value = j.avance[0]; } else $("avance").removeAttribute("value");
+  if (j.comando) {
+    $("detalle").hidden = false;
+    $("log").textContent = "$ " + j.comando + "\n\n" + j.salida.join("\n");
+  }
+  if (corriendo) $("estado").textContent = j.avance ? `Simulando: ${fmt(j.avance[0], 0)} de ${fmt(j.avance[1], 0)} h` : "Preparando la malla…";
+}
+async function vigilar() {
+  clearInterval(sondeo);
+  const paso = async () => {
+    let j;
+    try { j = await api("/api/estado"); } catch { $("estado").textContent = "Se perdió la conexión con el servidor. ¿Se cerró su ventana?"; clearInterval(sondeo); return; }
+    pintarEstado(j);
+    if (j.estado === "corriendo") return;
+    clearInterval(sondeo);
+    if (j.estado === "listo") {
+      $("estado").textContent = "Corrida terminada.";
+      await cargarCorridas(j.id);
+      abrirCorrida(j.id);
+    } else if (j.estado === "error") {
+      $("estado").textContent = "La corrida falló.";
+      const motivo = j.salida.filter(l => l.startsWith("Error")).pop() || j.salida.slice(-1)[0] || "Error desconocido";
+      mostrarError(motivo);
+      $("detalle").open = true;
+    } else if (j.estado === "cancelado") $("estado").textContent = "Corrida cancelada.";
+  };
+  await paso();
+  sondeo = setInterval(paso, 700);
+}
+$("simular").addEventListener("click", async () => {
+  mostrarError("");
+  try { await api("/api/simular", leerForm()); await vigilar(); } catch (e) { mostrarError(e.message); }
+});
+$("cancelar").addEventListener("click", () => api("/api/cancelar", {}).catch(e => mostrarError(e.message)));
+$("restablecer").addEventListener("click", () => { mostrarError(""); construir(); });
+
+async function cargarCaso(nombre) {
+  mostrarError("");
+  try { base = await api(`/api/opciones?caso=${encodeURIComponent(nombre)}`); construir(); } catch (e) { mostrarError(e.message); }
+}
+$("caso").addEventListener("change", e => cargarCaso(e.target.value));
+(async function iniciar() {
+  try {
+    const { casos } = await api("/api/casos"), s = $("caso");
+    s.replaceChildren(...casos.map(c => el("option", { value: c }, c.replace(".yaml", ""))));
+    s.value = casos.includes("caso_14d.yaml") ? "caso_14d.yaml" : casos[0];
+    await cargarCaso(s.value);
+    const corridas = await cargarCorridas();
+    if (corridas.length) abrirCorrida(corridas[0].id);
+    const j = await api("/api/estado");
+    if (j.estado === "corriendo") vigilar();
+  } catch (e) { mostrarError(e.message); }
+})();
+</script>
+</body>
+</html>

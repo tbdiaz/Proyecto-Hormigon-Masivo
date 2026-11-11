@@ -14,6 +14,7 @@
                       [--ocultar 5] [--estudio-volumen 0.5 0.275 0.11] [--comparar-con resultados/.../serie.csv]
     mcplan clima pronostico | era5 | info ARCHIVO | listar | serie [config/caso_14d.yaml]
     mcplan vtk resultados/caso_14d/vtk [--t 96] [--corte x|y|z | --recorte x|y|z] [--pos 0] [--interactivo]
+    mcplan editor                          (o doble clic en abrir_editor.bat: cambiar datos y simular en el navegador)
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
     mcplan ifc-crear prueba.ifc            (misma fundación, generada sin Blender)
@@ -551,6 +552,15 @@ def cmd_simular3d(args):
         caso.salida = Path(args.salida)
     if args.fecha_inicio:
         caso.fecha_inicio = args.fecha_inicio
+    if args.k_hormigon is not None:
+        caso.hormigon.k = args.k_hormigon
+    if args.k_suelo is not None:
+        caso.suelo.k = args.k_suelo
+    for nombre in ("h_superior", "h_lateral", "absortividad", "emisividad"):
+        valor = getattr(args, nombre)
+        if valor is not None:  # el ambiente real se arma después con superficie_cfg si el caso tiene clima
+            setattr(caso.ambiente, nombre, valor)
+            caso.superficie_cfg[nombre] = valor
     if args.sin_moldaje:
         caso.cubiertas_cfg.pop("moldaje", None)
     elif args.retiro_moldaje is not None and "moldaje" in caso.cubiertas_cfg:
@@ -639,12 +649,19 @@ def cmd_simular3d(args):
         from .panel import Recolector
 
         recolector = Recolector(dom, caso.duracion_h, [e[0] for e in plan.eventos()])
+
+    def observar(t_h, T, activas):
+        if recolector:
+            recolector(t_h, T, activas)
+        if args.progreso:
+            print(f"PROGRESO {t_h:g} {caso.duracion_h:g}", flush=True)
+
     t1 = time.perf_counter()
     res = simular_3d(
         dom, plan, caso.hormigon, caso.suelo, caso.hidratacion, caso.ambiente, caso.duracion_h,
         T_suelo_inicial=caso.T_suelo_inicial, guardar_cada_h=caso.guardar_cada_h, dt_max_s=caso.dt_max_s,
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
-        informar=lambda m: print("    " + m), observador=recolector, cubiertas=caso.cubiertas,
+        informar=lambda m: print("    " + m), observador=observar, cubiertas=caso.cubiertas,
         profundidad_tmin=caso.profundidad_tmin, superficie_tmin=caso.superficie_tmin,
     )
     t_calculo = time.perf_counter() - t1
@@ -878,6 +895,12 @@ def cmd_vtk(args):
     return 0
 
 
+def cmd_editor(args):
+    from .servidor import ejecutar
+
+    return ejecutar(args.puerto, abrir=not args.sin_abrir)
+
+
 def cmd_ifc_crear(args):
     from .ifc_io import crear_modelo_base
 
@@ -1051,6 +1074,13 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--aislacion", metavar="CAPA", help="capa del YAML sobre las caras superiores (o 'ninguna')")
     s.add_argument("--retiro-aislacion", type=float, metavar="H", help="retiro de la aislación H horas después")
     s.add_argument("--aislacion-caras", choices=("superiores", "laterales", "todas"), help="dónde va la aislación")
+    s.add_argument("--k-hormigon", type=float, help="conductividad del hormigón [W/mK]")
+    s.add_argument("--k-suelo", type=float, help="conductividad del suelo [W/mK]")
+    s.add_argument("--h-superior", type=float, help="h de las caras ±z [W/m²K] (modelo combinado)")
+    s.add_argument("--h-lateral", type=float, help="h de las caras laterales [W/m²K] (modelo combinado)")
+    s.add_argument("--absortividad", type=float, help="absortividad solar del hormigón (modelo físico)")
+    s.add_argument("--emisividad", type=float, help="emisividad del hormigón (modelo físico)")
+    s.add_argument("--progreso", action="store_true", help="imprime el avance para el editor")
     s.set_defaults(func=cmd_simular3d)
 
     s = sub.add_parser("clima", help="Clima real: snapshots de Open-Meteo (pronóstico y ERA5) y serie para los bordes")
@@ -1091,6 +1121,11 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--interactivo", action="store_true", help="abre una ventana para girar la vista")
     s.add_argument("--captura", help="guarda la vista en este PNG")
     s.set_defaults(func=cmd_vtk)
+
+    s = sub.add_parser("editor", help="Abre en el navegador un editor para cambiar datos y simular sin la terminal")
+    s.add_argument("--puerto", type=int, default=8765)
+    s.add_argument("--sin-abrir", action="store_true", help="no abre el navegador")
+    s.set_defaults(func=cmd_editor)
 
     s = sub.add_parser("ifc-crear", help="Genera la fundación oficial con IfcOpenShell (sin Blender)")
     s.add_argument("ruta", help="archivo .ifc de salida")

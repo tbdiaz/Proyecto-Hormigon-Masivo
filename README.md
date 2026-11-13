@@ -40,6 +40,20 @@ python3 -m venv .venv
 Luego se activa el entorno (`.venv\Scripts\Activate.ps1` o `source .venv/bin/activate`) o se
 llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz del repositorio.
 
+## Decisión probabilística (E13 / defensa F02)
+
+```powershell
+mcplan clima ensemble                          # ensemble ECMWF (51 miembros) como snapshot nuevo
+mcplan estudio --solo-preparar                 # curvas, historias climáticas, cronogramas y sus figuras
+mcplan estudio                                 # planes x 8 curvas x 3 historias, en paralelo; retoma lo que falte
+mcplan estudio --detalle 5V-e24 M4_22A fría    # una corrida con cortes, vista 3D y VTK
+mcplan estudio --sensibilidad 5V-e24 M4_22A fría   # malla, paso de tiempo y profundidad de Tmin
+```
+
+Todo se configura en [`config/estudio.yaml`](config/estudio.yaml) y los resultados quedan en `resultados/estudio/`:
+`escenarios.csv` (una fila por plan y escenario), `resumen.md`, `resumen_planes.csv`, `definicion.json` y las figuras.
+Método y resultados: [docs/decision.md](docs/decision.md).
+
 ## Editor sin terminal
 
 Doble clic en **`abrir_editor.bat`** (o `mcplan editor`): se abre en el navegador un formulario para cambiar Δx,
@@ -49,8 +63,8 @@ y cada corrida queda en `resultados/editor/`. No modifica los YAML ni el IFC.
 ## Uso rápido
 
 ```powershell
-pytest                                            # 145 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
-pytest -m "not lento"                             # la batería rápida (141 tests, ~1 min)
+pytest                                            # 153 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
+pytest -m "not lento"                             # la batería rápida (149 tests, ~1 min)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
@@ -212,6 +226,9 @@ src/mcplan/
   simulacion3d.py    fundación 3D por etapas: suelo + vertidas que aparecen en su Inicio_h, bordes, hidratación
   bordes.py          condiciones de borde: viento, onda larga, sol (T sol-aire), moldaje/aislación en serie, desmolde
   clima.py           Open-Meteo (pronóstico y ERA5), snapshots inmutables con metadata, serie + climatología
+  curvas.py          curvas de hidratación medidas -> fuente por edad (rampa inicial, suavizado, cola)
+  planes.py          planes de obra: etapas, esperas, tasa de colocación, D y activación por capas
+  estudio.py, informe_estudio.py  decisión: planes x curvas x clima, P_T, P_Δ, P_f, tablas y figuras
   vtk_io.py          exportación VTK (.vti/.pvd) para ParaView y vista con PyVista (slice, clipping)
   vista3d.py         vista 3D con un cuarto cortado (PNG)
   panel.py, panel.html  panel interactivo de cada corrida: Δx, Δt, β de los bordes, vista 3D, cortes y curvas
@@ -221,7 +238,8 @@ src/mcplan/
 tests/               tests automatizados (pytest)
 data/clima/          snapshots meteorológicos (JSON tal como llegan de Open-Meteo + metadata) e índice
 docs/                modelo 1D, solver 2D/3D (E05), dossier (E06), vertidas (E07), pipeline 3D (E08), línea base (E09),
-                     ambiente y clima (E10/E11), simulación de 14 días (E12)
+                     ambiente y clima (E10/E11), simulación de 14 días (E12), decisión (E13/F02)
+data/hidratacion/    las 8 curvas de hidratación entregadas por el profesor (source_terms.txt, sin modificar)
 ```
 
 ## Arquitectura
@@ -253,7 +271,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 145 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 153 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |
@@ -263,7 +281,8 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Clima real: Open-Meteo (ECMWF IFS + ERA5), snapshots inmutables, horizonte completado con climatología | ✅ `clima.py`, `data/clima/` |
 | Exportación VTK y vista PyVista (slice, clipping, núcleo y superficie) | ✅ `vtk_io.py` |
 | Simulación determinista de 14 días (E12) | ✅ [docs/simulacion_14d.md](docs/simulacion_14d.md) |
-| Monte Carlo / HPC | ⏳ pendiente |
+| Decisión probabilística: 8 curvas x 3 historias (ensemble), P_f conjunta, familia de planes | ✅ `mcplan estudio` |
+| HPC | no se usa: enumeración ponderada en paralelo en el computador local |
 
 ## Supuestos vigentes
 

@@ -1,0 +1,2 @@
+# Datos originales: se guardan byte a byte (sin convertir finales de línea) para que sus SHA-256 no cambien.
+data/** -text

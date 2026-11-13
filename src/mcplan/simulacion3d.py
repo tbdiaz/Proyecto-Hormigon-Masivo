@@ -118,6 +118,33 @@ def aplicar_cambios(vox: Voxelizacion, cambios: dict | None) -> list[str]:
 # Solver por etapas
 # ---------------------------------------------------------------------------
 
+@dataclass
+class Activacion:
+    """Cuándo aparece cada celda de hormigón y a qué temperatura.
+
+    Con un PlanVertidas, cada vertida del IFC aparece entera en su Inicio_h. Un plan de obra
+    (planes.py) puede, en cambio, colocar cada etapa por capas a la tasa de la bomba: las
+    celdas aparecen de abajo hacia arriba y cada una parte con su propia edad 0.
+    """
+
+    t_act: np.ndarray  # forma del dominio: hora de colocación de cada celda (inf = no se coloca)
+    T_col: np.ndarray  # forma del dominio: temperatura de colocación [°C]
+    inicio_h: np.ndarray  # por vertida del IFC: primera celda colocada (inf si no se construye)
+    fin_h: np.ndarray  # por vertida del IFC: última celda colocada (desde aquí se cuenta el retiro del moldaje)
+    T_col_v: np.ndarray  # por vertida del IFC: temperatura de colocación
+
+    @classmethod
+    def desde_plan(cls, dom: "Dominio", plan: PlanVertidas) -> "Activacion":
+        vid = dom.vertida_id.astype(np.int64)
+        ini = np.concatenate([[np.inf], plan.inicio_h])
+        Tc = np.concatenate([[np.nan], plan.T_colocacion])
+        return cls(t_act=ini[vid], T_col=Tc[vid], inicio_h=np.asarray(plan.inicio_h, float),
+                   fin_h=np.asarray(plan.inicio_h, float), T_col_v=np.asarray(plan.T_colocacion, float))
+
+    def vertidas_activas(self, t_h) -> list[int]:
+        return [v + 1 for v, t in enumerate(self.inicio_h) if t <= t_h + 1e-9]
+
+
 _NORMALES = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]], dtype=float)
 
 
@@ -241,13 +268,14 @@ class Resultado3D:
     edades: dict  # t_h -> te [h] (float32) en los mismos instantes
     dts: list = field(default_factory=list)  # (t_inicio_h, dt [s], dt_critico [s]) por tramo
     etapas: list = field(default_factory=list)  # (t_h, vertidas colocadas, dt_critico [s]) al cambiar las celdas
-    eventos: list = field(default_factory=list)  # colocaciones (t_h, v, nombre, T_colocación)
+    eventos: list = field(default_factory=list)  # inicio de colocación (t_h, v, nombre, T_colocación)
     retiros: list = field(default_factory=list)  # (t_h, descripción) de moldajes y aislaciones retirados
     Tmin_pos: np.ndarray | None = None  # (n, 3) dónde está Tmin [m]
     profundidad_tmin: float | None = None  # None = centro de la celda de superficie
     superficie_tmin: str = "todas"  # "plana": sólo caras de celdas con una única cara expuesta
     Tmin_todas: np.ndarray | None = None  # Tmin contando aristas y vértices (dato complementario)
     Tmin_todas_pos: np.ndarray | None = None
+    balance: dict = field(default_factory=dict)  # balance de energía [J] (ver simular_3d)
 
     @property
     def dT(self) -> np.ndarray:
@@ -280,6 +308,7 @@ def simular_3d(
     cubiertas: PlanCubiertas | None = None,
     profundidad_tmin: float | None = None,
     superficie_tmin: str = "todas",
+    activacion: Activacion | None = None,
 ) -> Resultado3D:
     """Integra la fundación por etapas: entre eventos (colocación o retiro de una capa) la geometría no cambia.
 
@@ -290,6 +319,11 @@ def simular_3d(
     superficie_tmin: "plana" toma Tmin sólo en caras de celdas con una única cara expuesta (puntos
     representativos de una superficie); "todas" incluye aristas y vértices. Tmin_todas siempre se registra.
     observador(t_h, T, activas), si se indica, se llama en cada instante guardado (ver panel.Recolector).
+    activacion: hora y temperatura de colocación de cada celda (por defecto, la de `plan`).
+
+    Balance de energía (res.balance): E_final - E_inicial = colocación + hidratación + bordes + fondo,
+    con E = suma de C T V sobre las celdas que existen. Euler explícito lo cumple a precisión de máquina;
+    el residuo relativo se informa como evidencia de conservación.
     """
     forma = dom.forma
     dx = dom.dx
@@ -394,8 +428,13 @@ def simular_3d(
     # Instantes de guardado, colocaciones y retiros: la integración avanza de uno a otro.
     n_g = max(1, math.ceil(duracion_h / guardar_cada_h - 1e-9))
     guardados = [min(i * guardar_cada_h, duracion_h) for i in range(n_g + 1)]
-    colocaciones = {t for t, *_ in plan.eventos() if 0 <= t <= duracion_h}
-    retiros_plan = [(t, d) for t, d in cubiertas.eventos(plan.inicio_h) if 0 <= t <= duracion_h]
+    act = activacion if activacion is not None else Activacion.desde_plan(dom, plan)
+    t_act = np.where(es_h, act.t_act, np.inf)
+    colocaciones = {float(t) for t in np.unique(t_act[np.isfinite(t_act)]) if 0 <= t <= duracion_h}
+    retiros_plan = [(t, d) for t, d in cubiertas.eventos(act.inicio_h, act.fin_h) if 0 <= t <= duracion_h]
+    V = dx**3
+    bal = {"hidratacion": 0.0, "bordes": 0.0, "fondo": 0.0, "colocacion": 0.0}
+    E_inicial = float(np.sum(np.where(activas, C * np.nan_to_num(T), 0.0))) * V
     hitos = sorted(set(guardados) | colocaciones | {t for t, _ in retiros_plan})
 
     etapa = None
@@ -432,9 +471,13 @@ def simular_3d(
                 var.fill(0.0)
                 # Bordes al ambiente: q = U (T_eq - T) por cada cara expuesta, agrupadas por categoría.
                 U, T_eq = etapa.coeficientes(ambiente, t0 * 3600 + paso * dt, dx)
-                var_v[sup] += etapa.N @ (U * T_eq / dx) - (etapa.N @ (U / dx)) * Tv[sup]
+                q = etapa.N @ (U * T_eq / dx) - (etapa.N @ (U / dx)) * Tv[sup]
+                var_v[sup] += q
+                bal["bordes"] += float(q.sum()) * V * dt
                 # Fondo del suelo: Dirichlet a media celda.
-                var_v[fondo] += etapa.g_fondo * (ambiente.T_fondo - Tv[fondo])
+                q = etapa.g_fondo * (ambiente.T_fondo - Tv[fondo])
+                var_v[fondo] += q
+                bal["fondo"] += float(q.sum()) * V * dt
                 # Conducción entre vecinas: flujo g (Tb - Ta), igual y opuesto.
                 for (a, b), g, d in zip(cortes, etapa.G, difs):
                     np.subtract(T[b], T[a], out=d)
@@ -445,40 +488,49 @@ def simular_3d(
                 Th, eh = Tv[ids], Ev[ids]
                 f = hidratacion.factor_arrhenius(Th)
                 if hasattr(hidratacion, "dtheta_dte"):  # Ju y Lei: Q = rho cp dtheta/dte dte/dt (sin repetir Arrhenius)
-                    var_v[ids] += rho_cp * hidratacion.dtheta_dte(eh) * f / 3600.0
+                    q = rho_cp * hidratacion.dtheta_dte(eh) * f / 3600.0
                 else:
-                    var_v[ids] += hidratacion.potencia(eh, Th, hormigon.rho, hormigon.cp)
+                    q = hidratacion.potencia(eh, Th, hormigon.rho, hormigon.cp)
+                var_v[ids] += q
+                bal["hidratacion"] += float(np.sum(q)) * V * dt
                 Ev[ids] = eh + dt / 3600.0 * f
                 var *= dt_C
                 T += var
             edad = Ev.reshape(forma)
             T = np.where(activas, T, np.nan)
 
-        # Vertidas que se colocan en (t_prev, t_h]: T de colocación y te = 0 (misma regla que PlanVertidas.activar).
-        nuevas = [v for v in plan.vertidas_activas(t_h) if plan.inicio_h[v - 1] > t_prev + 1e-9]
-        for v in nuevas:
-            celdas = vox_id == v
-            T[celdas] = plan.T_colocacion[v - 1]
+        # Celdas que se colocan en (t_prev, t_h]: T de colocación y te = 0 (misma regla que PlanVertidas.activar).
+        celdas = (t_act > t_prev + 1e-9) & (t_act <= t_h + 1e-9)
+        nuevas = bool(celdas.any())
+        if nuevas:
+            T[celdas] = act.T_col[celdas]
             edad[celdas] = 0.0
             activas |= celdas
-            eventos.append((t_h, v, dom.vox.nombres[v - 1], float(plan.T_colocacion[v - 1])))
+            bal["colocacion"] += float(np.sum(C[celdas] * act.T_col[celdas])) * V
+        for v in range(1, nv + 1):
+            if t_prev + 1e-9 < act.inicio_h[v - 1] <= t_h + 1e-9:
+                eventos.append((t_h, v, dom.vox.nombres[v - 1], float(act.T_col_v[v - 1])))
         for t_r, d in retiros_plan:
             if t_prev + 1e-9 < t_r <= t_h + 1e-9:
                 retiros.append((t_r, d))
                 if informar:
                     informar(f"t = {t_h:6.1f} h: {d}")
-        tabla, combos = cubiertas.tabla(t_h, plan.inicio_h, nv)
+        tabla, combos = cubiertas.tabla(t_h, act.inicio_h, nv, act.fin_h)
         firma = (tabla.tobytes(), tuple(tuple(c.nombre for c in cs) for cs in combos))
         if nuevas or etapa is None or firma != tabla_actual:
             etapa = _etapa(dom, activas, k, C, ambiente, tabla, combos, hormigon.k, suelo.k)
             tabla_actual = firma
-            etapas.append((t_h, plan.vertidas_activas(t_h), float(etapa.dt_critico)))
-            if informar and (nuevas or n_hito == 0):
-                informar(f"t = {t_h:6.1f} h: activas {plan.vertidas_activas(t_h)}, dt crítico = {etapa.dt_critico:.0f} s")
+            etapas.append((t_h, act.vertidas_activas(t_h), float(etapa.dt_critico)))
+            if informar and (any(e[0] == t_h for e in eventos) or n_hito == 0):
+                informar(f"t = {t_h:6.1f} h: activas {act.vertidas_activas(t_h)}, dt crítico = {etapa.dt_critico:.0f} s")
         t_prev = t_h
         if t_h in guardados:
             registrar(t_h)
 
+    E_final = float(np.sum(np.where(activas, C * np.nan_to_num(T), 0.0))) * V
+    entradas = sum(bal.values())
+    bal = {**bal, "E_inicial": E_inicial, "E_final": E_final,
+           "residuo_relativo": abs(E_final - E_inicial - entradas) / max(abs(bal["hidratacion"]), abs(entradas), 1.0)}
     if "campo" in mayor:
         campos.setdefault(mayor["t"], mayor["campo"])
         edades.setdefault(mayor["t"], mayor["edad"])
@@ -490,7 +542,7 @@ def simular_3d(
         corte_y0=np.stack(reg["corte"]), campos=campos, edades=edades, dts=dts, eventos=eventos, etapas=etapas,
         retiros=retiros, Tmin_pos=np.array(reg["pos_min"]), profundidad_tmin=profundidad_tmin,
         superficie_tmin=superficie_tmin if profundidad_tmin is not None else "todas",
-        Tmin_todas=np.array(reg["Tmin_t"]), Tmin_todas_pos=np.array(reg["pos_min_t"]),
+        Tmin_todas=np.array(reg["Tmin_t"]), Tmin_todas_pos=np.array(reg["pos_min_t"]), balance=bal,
     )
 
 

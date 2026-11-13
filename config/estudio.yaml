@@ -1,0 +1,89 @@
+# Estudio de decisión (E13 / defensa F02): ¿cómo colocar todo el hormigón en el menor tiempo
+# con P_f = P({M_T > 70 °C} ∪ {M_Δ > 20 °C}) <= 5 %?
+#
+#   mcplan estudio config/estudio.yaml                 # corre lo que falta y escribe tablas y figuras
+#   mcplan estudio config/estudio.yaml --detalle 5V-e24 M1_SS fría   # una corrida con cortes y VTK
+#
+# La física (geometría IFC, suelo, bordes, moldaje) es la de caso_14d.yaml; aquí se fijan t0,
+# recursos, curvas, clima y la familia de planes. Mismos escenarios y pesos para todos los planes.
+
+caso: caso_14d.yaml
+salida: ../resultados/estudio
+
+t0: "2026-11-19T08:00"     # jueves 19 nov 2026, 08:00 hora local (America/Santiago, UTC-3), común a todos los planes
+horizonte_h: 336           # 14 días desde t0
+despues_ultima_colocacion_h: 168   # además, al menos 7 días después de la última colocación (picos tardíos)
+dx: 0.275                  # malla de exploración [m]; la propuesta se confirma con una malla más fina
+dt_max_s: 600
+guardar_cada_h: 1.0
+profundidad_superficie_m: 0.025
+
+recursos:
+  tasa_colocacion_m3_h: 27  # [SUPUESTO] una bomba y una cuadrilla: Ju y Lei vaciaron una fundación igual en
+                            # ~24 h (637 m³ / 24 h ≈ 27 m³/h). Etapas en serie, sin simultaneidad.
+T_colocacion: 18           # °C, igual en todas las etapas (guía del curso); los planes pueden cambiarla
+
+curvas:
+  archivo: ../data/hidratacion/source_terms.txt   # 8 curvas Q(t) [W/m³] entregadas por el profesor
+  usar: todas
+  pesos: iguales           # [HIPÓTESIS] 8 probetas de la misma mezcla (M1-M4 × 2 campañas), equiprobables
+  desfase_h: 2.0           # t = 0 del archivo = inicio del registro + 2 h
+  cola: exponencial        # después del registro (sensibilidad: cero / constante)
+
+clima:
+  fuente: ensemble         # 51 miembros ECMWF IFS ENS + continuación climatológica ERA5 (o: era5_bloques)
+  ensemble: ultimo
+  climatologia: ultimo
+  historias: 3             # terciles del índice de frío; peso = fracción de miembros representada
+  dias_indice: 7
+  transicion_h: 24
+  ventana_dias: 3
+
+# Familia de planes: la partición y los recursos están fijos dentro de cada familia, y se
+# recorren las esperas entre etapas. Con una sola bomba, todo plan sin esperas dura lo mismo
+# (V/r ≈ 23,6 h) y es físicamente igual a la vertida única (colocación continua por capas).
+planes:
+  - nombre: unica
+    descripcion: vertida única, colocación continua de todo el volumen
+    etapas: [[1, 2, 3, 4, 5]]
+  - familia: 5V
+    descripcion: 5 vertidas del IFC
+    etapas: [[1], [2], [3], [4], [5]]
+    esperas_h: [12, 24, 48, 72]
+  - familia: 8C
+    descripcion: 8 capas de <= 0,55 m (V3, V4 y V5 en dos)
+    etapas:
+      - {vertidas: [1]}
+      - {vertidas: [2]}
+      - {vertidas: [3], z: [1.10, 1.65]}
+      - {vertidas: [3], z: [1.65, 2.20]}
+      - {vertidas: [4], z: [2.20, 2.75]}
+      - {vertidas: [4], z: [2.75, 3.30]}
+      - {vertidas: [5], z: [3.30, 3.80]}
+      - {vertidas: [5], z: [3.80, 4.30]}
+    esperas_h: [24, 48]
+  # Con protecciones (para cuantificar qué habría que cambiar): colocación a 10 °C, manta de 5 cm en
+  # todas las caras expuestas y moldaje durante los 14 días.
+  - nombre: unica-P
+    descripcion: vertida única a 10 °C con manta en todas las caras y moldaje 14 días
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 400}
+      aislacion: {capa: manta_5cm, caras: todas, retiro_h: 400}
+  - familia: 8C-P
+    descripcion: 8 capas a 10 °C con manta en todas las caras y moldaje 14 días
+    T_colocacion: 10
+    etapas:
+      - {vertidas: [1]}
+      - {vertidas: [2]}
+      - {vertidas: [3], z: [1.10, 1.65]}
+      - {vertidas: [3], z: [1.65, 2.20]}
+      - {vertidas: [4], z: [2.20, 2.75]}
+      - {vertidas: [4], z: [2.75, 3.30]}
+      - {vertidas: [5], z: [3.30, 3.80]}
+      - {vertidas: [5], z: [3.80, 4.30]}
+    esperas_h: [48]
+    cubiertas:
+      moldaje: {retiro_h: 400}
+      aislacion: {capa: manta_5cm, caras: todas, retiro_h: 400}

@@ -192,11 +192,26 @@ def _serie(hourly, variables):
     return t, {v: np.array([np.nan if x is None else x for x in hourly[v]], dtype=float) for v in variables}
 
 
+_CACHE_CLIMATOLOGIA = {}
+
+
 def climatologia(era5: dict, tiempos, variables, ventana_dias=3):
     """Media de cada hora del calendario sobre todos los años y ± ventana_dias (misma hora del día).
 
     Conserva el ciclo diario típico de esos días; suaviza los eventos (frentes, días nublados).
     """
+    clave = (era5.get("metadata", {}).get("sha256_respuesta"), tuple(np.asarray(tiempos, dtype="datetime64[m]").tolist()),
+             tuple(variables), ventana_dias)
+    if clave[0] is not None and clave in _CACHE_CLIMATOLOGIA:
+        salida, muestras = _CACHE_CLIMATOLOGIA[clave]
+        return {v: x.copy() for v, x in salida.items()}, muestras.copy()
+    salida, muestras = _climatologia(era5, tiempos, variables, ventana_dias)
+    if clave[0] is not None:
+        _CACHE_CLIMATOLOGIA[clave] = (salida, muestras)
+    return {v: x.copy() for v, x in salida.items()}, muestras.copy()
+
+
+def _climatologia(era5: dict, tiempos, variables, ventana_dias=3):
     tabla = {}
     for datos in era5["respuesta"]["por_anio"].values():
         t, vals = _serie(datos["hourly"], variables)
@@ -314,3 +329,119 @@ def perfil_suelo(era5: dict, fecha_inicio, ventana_dias=3):
     info = {"profundidades_m": prof.tolist(), "T_capas_C": [round(float(x), 2) for x in T_capas],
             "T_fondo_C": round(T_profunda, 2), "nota": nota}
     return T_inicial, T_profunda, info
+
+
+# ---------------------------------------------------------------------------
+# Ensemble e historias climáticas para la evaluación probabilística (E13/F02)
+# ---------------------------------------------------------------------------
+
+API_ENSEMBLE = "https://ensemble-api.open-meteo.com/v1/ensemble"
+VARIABLES_ENSEMBLE = ("temperature_2m", "wind_speed_10m", "shortwave_radiation", "cloud_cover")
+
+
+def descargar_ensemble(ruta_sitio="config/sitio.yaml", modelo="ecmwf_ifs025", dias=15, carpeta=CARPETA,
+                       indice=INDICE) -> Path:
+    """Descarga todos los miembros del ensemble vigente (ECMWF IFS ENS: control + 50) como snapshot nuevo."""
+    sitio = _sitio(ruta_sitio)
+    params = {"latitude": sitio["latitud"], "longitude": sitio["longitud"], "hourly": ",".join(VARIABLES_ENSEMBLE),
+              "models": modelo, "forecast_days": dias, "timezone": ZONA, "wind_speed_unit": "ms"}
+    ahora = datetime.now(timezone.utc)
+    datos, url = _pedir(API_ENSEMBLE, params)
+    h = datos["hourly"]
+    claves = [k for k in h if k.startswith("temperature_2m")]
+    metadata = {
+        "tipo": "ensemble", "fuente": "Open-Meteo Ensemble API", "endpoint": API_ENSEMBLE, "url": url,
+        "parametros": params, "modelo": modelo, "descargado_utc": ahora.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sitio": sitio,
+        "punto_modelo": {"latitud": datos["latitude"], "longitud": datos["longitude"], "elevacion_m": datos["elevation"]},
+        "zona_horaria": datos["timezone"], "utc_offset_s": datos["utc_offset_seconds"],
+        "unidades": {k: v for k, v in datos["hourly_units"].items() if "_member" not in k},
+        "variables": list(VARIABLES_ENSEMBLE), "miembros": len(claves),
+        "horizonte": {"desde": h["time"][0], "hasta": h["time"][-1], "horas": len(h["time"]),
+                      "ultima_hora_con_dato": {"temperature_2m": next(
+                          (h["time"][i] for i in range(len(h["time"]) - 1, -1, -1) if h["temperature_2m"][i] is not None),
+                          None)}},
+    }
+    nombre = f"ensemble_{modelo}_{ahora.strftime('%Y%m%dT%H%MZ')}.json"
+    return _guardar(carpeta, nombre, metadata, datos, indice)
+
+
+def miembros_ensemble(snap: dict) -> list[str]:
+    """Nombres de los miembros: 'control', 'member01', ..."""
+    h = snap["respuesta"]["hourly"]
+    nombres = ["control"] if "temperature_2m" in h else []
+    return nombres + sorted(k.split("_")[-1] for k in h if k.startswith("temperature_2m_member"))
+
+
+def _como_pronostico(snap: dict, miembro: str) -> dict:
+    """Un miembro del ensemble con la forma de un snapshot de pronóstico (para reutilizar ensamblar)."""
+    h = snap["respuesta"]["hourly"]
+    sufijo = "" if miembro == "control" else f"_{miembro}"
+    hourly = {"time": h["time"], **{v: h[v + sufijo] for v in VARIABLES_ENSEMBLE}}
+    m = snap["metadata"]
+    return {"respuesta": {"hourly": hourly}, "archivo": snap["archivo"],
+            "metadata": {**m, "modelo": f"{m['modelo']} {miembro}",
+                         "horizonte": {"desde": h["time"][0], "hasta": h["time"][-1]}}}
+
+
+def historias_ensemble(snap_ens: dict, era5: dict, fecha_inicio, horas, transicion_h=24.0, ventana_dias=3):
+    """Una historia completa por miembro: el miembro donde existe y la continuación climatológica después."""
+    return [(m, ensamblar(fecha_inicio, horas, _como_pronostico(snap_ens, m), era5, transicion_h, ventana_dias))
+            for m in miembros_ensemble(snap_ens)]
+
+
+def historias_era5(era5: dict, fecha_inicio, horas):
+    """Bloques históricos: cada año del snapshot ERA5, en las mismas fechas del calendario (sin promediar)."""
+    t0 = datetime.fromisoformat(fecha_inicio)
+    nombres = {"T_aire": "temperature_2m", "viento": "wind_speed_10m", "G": "shortwave_radiation",
+               "nubosidad": "cloud_cover"}
+    historias = []
+    for anio, datos in sorted(era5["respuesta"]["por_anio"].items()):
+        t, vals = _serie(datos["hourly"], tuple(nombres.values()))
+        inicio = np.datetime64(t0.replace(year=int(anio)), "m")
+        tiempos = inicio + np.arange(0, int(np.ceil(horas)) + 1).astype("timedelta64[h]")
+        pos = {ti: i for i, ti in enumerate(t)}
+        if not all(ti in pos for ti in tiempos):
+            raise ValueError(f"ERA5 {anio} no cubre {len(tiempos)} h desde {inicio}: descarga una ventana más larga")
+        idx = [pos[ti] for ti in tiempos]
+        v = {k: vals[n][idx] for k, n in nombres.items()}
+        historias.append((f"ERA5 {anio}", Clima(
+            t_h=np.arange(len(tiempos), dtype=float), T_aire=v["T_aire"], viento=v["viento"], G=v["G"],
+            nubosidad=v["nubosidad"] / 100.0, origen=[f"ERA5 {anio}"] * len(tiempos),
+            metadata={"fecha_inicio": fecha_inicio, "zona_horaria": ZONA, "horas": len(tiempos),
+                      "horas_pronostico": 0, "horas_transicion": 0, "horas_climatologia": 0,
+                      "bloque_era5": int(anio), "pronostico": None, "climatologia": {
+                          "archivo": Path(era5["archivo"]).name, "anios": era5["metadata"]["anios"],
+                          "ventana_dias": 0, "muestras_por_hora": 1,
+                          "descargado_utc": era5["metadata"]["descargado_utc"],
+                          "sha256": era5["metadata"]["sha256_respuesta"]}})))
+    return historias
+
+
+def indice_frio(clima: Clima, dias=7) -> float:
+    """Media de las mínimas diarias de T del aire en los primeros `dias` desde t0 [°C]."""
+    n = min(int(dias * 24), len(clima.T_aire) - 1)
+    T = clima.T_aire[:n - n % 24].reshape(-1, 24)
+    return float(T.min(axis=1).mean())
+
+
+def reducir_historias(historias, k=3, dias_indice=7) -> list[dict]:
+    """Agrupa las historias en k terciles (o k-tiles) del índice de frío y elige un representante por grupo.
+
+    Peso de cada representante = fracción de historias de su grupo. Se conserva la historia
+    completa del representante (ciclo diario, persistencia y coherencia entre variables).
+    """
+    indices = np.array([indice_frio(c, dias_indice) for _, c in historias])
+    orden = np.argsort(indices)
+    grupos = np.array_split(orden, k)
+    elegidas = []
+    for n, g in enumerate(grupos):
+        mediana = float(np.median(indices[g]))
+        rep = int(g[np.argmin(np.abs(indices[g] - mediana))])
+        etiqueta = ("fría", "media", "cálida")[n] if k == 3 else f"grupo {n + 1}"
+        elegidas.append({"nombre": f"{etiqueta} ({historias[rep][0]})", "etiqueta": etiqueta,
+                         "representante": historias[rep][0], "clima": historias[rep][1],
+                         "peso": len(g) / len(historias), "miembros": [historias[i][0] for i in g],
+                         "indice_C": float(indices[rep]),
+                         "rango_indice_C": [float(indices[g].min()), float(indices[g].max())]})
+    return elegidas

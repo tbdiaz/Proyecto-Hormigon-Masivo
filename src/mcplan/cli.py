@@ -12,8 +12,9 @@
     mcplan voxelizar  [geometry/foundation.ifc] [--dx 0.05] [--estudio 0.5 0.25 0.1 0.05]
     mcplan simular3d  [config/caso_3d.yaml] [--dx 0.275] [--duracion 336] [--inicio 2=12] [--T-colocacion 3=10]
                       [--ocultar 5] [--estudio-volumen 0.5 0.275 0.11] [--comparar-con resultados/.../serie.csv]
-    mcplan clima pronostico | era5 | info ARCHIVO | listar | serie [config/caso_14d.yaml]
+    mcplan clima pronostico | ensemble | era5 | info ARCHIVO | listar | serie [config/caso_14d.yaml]
     mcplan vtk resultados/caso_14d/vtk [--t 96] [--corte x|y|z | --recorte x|y|z] [--pos 0] [--interactivo]
+    mcplan estudio [config/estudio.yaml] [--solo-preparar] [--detalle P C K] [--sensibilidad P C K]
     mcplan editor                          (o doble clic en abrir_editor.bat: cambiar datos y simular en el navegador)
     mcplan ifc-propiedades geometry/foundation.ifc
     mcplan ifc-info  geometry/foundation.ifc [--guardar antes.json] [--comparar antes.json]
@@ -784,6 +785,11 @@ def cmd_clima(args):
         print(f"Snapshot nuevo: {ruta}")
         args.archivo = ruta
         args.accion = "info"
+    elif args.accion == "ensemble":
+        ruta = cl.descargar_ensemble(args.sitio, args.modelo, args.dias, args.carpeta, args.indice)
+        print(f"Snapshot nuevo: {ruta}")
+        args.archivo = ruta
+        args.accion = "info"
     elif args.accion == "era5":
         anios = range(args.anios[0], args.anios[1] + 1)
         ruta = cl.descargar_era5(args.fecha_inicio, args.sitio, args.dias, args.margen, anios, args.carpeta,
@@ -809,6 +815,8 @@ def cmd_clima(args):
         if "ultima_hora_con_dato" in h:
             for v, u in h["ultima_hora_con_dato"].items():
                 print(f"                {v}: con dato hasta {u}")
+        if "miembros" in m:
+            print(f"Miembros:       {m['miembros']} (control + perturbados)")
         if "anios" in m:
             print(f"Años:           {m['anios'][0]}–{m['anios'][-1]}, ventana {m['ventana']}")
         print("Variables y unidades:")
@@ -892,6 +900,136 @@ def cmd_vtk(args):
         print(f"Superficie (celda expuesta más fría):     {Ts:.1f} °C en ({xs:.2f}, {ys:.2f}, {zs:.2f}) m")
     if captura:
         print(f"Imagen: {captura}")
+    return 0
+
+
+def cmd_estudio(args):
+    import csv
+    from pathlib import Path
+
+    import numpy as np
+
+    from . import estudio as es
+    from . import informe_estudio as inf
+    from .curvas import tabla_curvas
+
+    cfg = es.cargar_estudio(args.config)
+    dx = args.dx or float(cfg.get("dx", 0.275))
+    salida = Path(cfg["_salida"])
+    salida.mkdir(parents=True, exist_ok=True)
+    print(f"Estudio {args.config}: t0 = {cfg['t0']}, dx = {dx:g} m, salida {salida}")
+    esc = es.preparar_escenarios(cfg)
+    rho_cp = esc["caso"].hormigon.capacidad
+    print("\nCurvas (fuente por edad, sin Arrhenius):")
+    for f in tabla_curvas(esc["fuentes"], rho_cp):
+        print(f"  {f['curva']:7} p = {esc['p_curva'][f['curva']]:.4f}  Q_max {f['Q_max']:6.0f} W/m³  "
+              f"E(72 h) {f['E72_MJ_m3']:5.0f} MJ/m³  E(336 h) {f['E336_MJ_m3']:5.0f} MJ/m³ "
+              f"(≈ {f['dTad336_C']:.0f} °C adiabáticos)")
+    print("\nHistorias climáticas:")
+    for h in esc["historias"]:
+        print(f"  {h['nombre']:<28} q = {h['peso']:.4f}  índice {h['indice_C']:.1f} °C, representa {len(h['miembros'])}")
+    print("\nPlanes:")
+    for p in esc["planes"]:
+        print(f"  {p.nombre:<10} D = {esc['cronos'][p.nombre]['D_h']:6.1f} h  {p.resumen()}")
+    inf.fig_curvas(esc["fuentes"], rho_cp, salida / "curvas_hidratacion.png")
+    inf.fig_clima(esc["todas"], esc["historias"], salida / "historias_clima.png")
+    inf.fig_cronogramas(esc["cronos"], salida / "cronogramas.png")
+    if args.solo_preparar:
+        print(f"\nFiguras de preparación en {salida}")
+        return 0
+
+    def tarea_de(plan, curva, clima, d):
+        t = next((x for x in es.tareas(cfg, esc, d, [plan]) if x["curva"] == curva and x["clima_clave"] == clima), None)
+        if t is None:
+            raise ValueError(f"No existe el escenario {plan} / {curva} / {clima}")
+        return t
+
+    if args.detalle:
+        plan, curva, clima = args.detalle
+        tarea = tarea_de(plan, curva, clima, dx)
+        carpeta = salida / f"detalle_{plan}_{curva}_{clima}"
+        carpeta.mkdir(parents=True, exist_ok=True)
+        print(f"\nCorrida de detalle: {plan}, {curva}, clima {clima} (dx = {dx:g} m)")
+        D = esc["cronos"][plan]["D_h"]
+        res, _ = es.simular_tarea(tarea, instantes_3d_h=[round(D) + h for h in (0, 24, 72, 144)])
+        from .graficos import graficar_cortes_3d, graficar_nucleo_superficie, graficar_tmax_3d
+        from .vista3d import graficar_vista_3d
+        from .vtk_io import exportar_vtk
+
+        i, j = int(np.nanargmax(res.Tmax)), int(np.nanargmax(res.dT))
+        print(f"  M_T = {res.Tmax[i]:.1f} °C a las {res.t_h[i]:.0f} h en {np.round(res.Tmax_pos[i], 2).tolist()} m")
+        print(f"  M_Δ = {res.dT[j]:.1f} °C a las {res.t_h[j]:.0f} h; Tmin en {np.round(res.Tmin_pos[j], 2).tolist()} m")
+        print(f"  balance de energía: residuo relativo {res.balance['residuo_relativo']:.1e}")
+        graficar_tmax_3d(res, carpeta / "tmax.png")
+        graficar_nucleo_superficie(res, carpeta / "nucleo_superficie.png")
+        graficar_cortes_3d(res, carpeta / "cortes_y0.png")
+        vistas = sorted({min(res.campos, key=lambda a: abs(a - res.t_h[i])), min(res.campos, key=lambda a: abs(a - D))})
+        graficar_vista_3d(res, vistas, carpeta / "vista_3d.png")
+        exportar_vtk(res, carpeta / "vtk")
+        print(f"  Archivos en {carpeta}: tmax.png, nucleo_superficie.png, cortes_y0.png, vista_3d.png, vtk/")
+        return 0
+
+    if args.sensibilidad:
+        plan, curva, clima = args.sensibilidad
+        base = (args.dx_variantes[0], args.dt_variantes[0], args.profundidades[0])
+        variantes = [(d, base[1], base[2]) for d in args.dx_variantes]
+        variantes += [(base[0], t, base[2]) for t in args.dt_variantes[1:]]
+        variantes += [(base[0], base[1], p) for p in args.profundidades[1:]]
+        print(f"\nSensibilidad numérica de {plan} / {curva} / {clima}:")
+        print(f"  {'dx [m]':>7} {'dt [s]':>7} {'p [mm]':>7} {'M_T':>7} {'M_Δ':>7} {'t_MT':>6} {'t_MΔ':>6} "
+              f"{'residuo E':>10} {'s':>5}")
+        filas = []
+        for d, t, p in variantes:
+            tarea = tarea_de(plan, curva, clima, d)
+            tarea["dt_s"], tarea["profundidad"] = t, p
+            f = es.correr_escenario(tarea)["fila"]
+            filas.append({"dx": d, "dt_s": t, "profundidad_m": p, **{k: f[k] for k in (
+                "M_T", "M_D", "t_MT_h", "t_MD_h", "residuo_energia", "segundos")}})
+            print(f"  {d:7.3f} {t:7.0f} {p * 1000:7.1f} {f['M_T']:7.2f} {f['M_D']:7.2f} {f['t_MT_h']:6.0f} "
+                  f"{f['t_MD_h']:6.0f} {f['residuo_energia']:10.1e} {f['segundos']:5.0f}")
+        ruta = salida / f"sensibilidad_{plan}_{curva}_{clima}.csv"
+        with open(ruta, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, list(filas[0]))
+            w.writeheader()
+            w.writerows(filas)
+        print(f"  Tabla: {ruta}")
+        return 0
+
+    filas = es.ejecutar(cfg, esc, dx, args.procesos, args.planes)
+    esperadas = {t["firma"] for t in es.tareas(cfg, esc, dx, args.planes)}
+    filas = [f for f in filas if f["firma"] in esperadas]
+    resumen = es.agregar(filas, esc)
+    dec = es.decision(resumen)
+    sens = {}
+    pc = esc["p_curva"]
+    for camp in ("SS", "22A"):
+        sub = [n for n in pc if n.endswith("_" + camp)]
+        if sub and len(sub) < len(pc):
+            sens[f"sólo campaña {camp}"] = es.agregar(filas, esc, pesos_curva={n: 1 / len(sub) for n in sub})
+    claves = [h["clave"] for h in esc["historias"]]
+    if "fría" in claves:
+        sens["historia fría con peso 0,5"] = es.agregar(
+            filas, esc, pesos_clima={k: (0.5 if k == "fría" else 0.5 / (len(claves) - 1)) for k in claves})
+    sens["historias equiprobables"] = es.agregar(filas, esc, pesos_clima={k: 1 / len(claves) for k in claves})
+    inf.escribir_resumen(salida, esc, resumen, filas, dec, sens)
+    inf.fig_D_Pf(resumen, salida / "D_vs_Pf.png", dec)
+    inf.fig_escenarios(filas, [r["plan"] for r in sorted(resumen, key=lambda r: r["D_h"])], salida / "escenarios.png")
+    elegido = dec.get("propuesto") or dec.get("menor_riesgo")
+    fs = sorted([f for f in filas if f["plan"] == elegido], key=lambda f: f["M_D"])
+    if fs:
+        f = fs[len(fs) // 2]
+        nombre = f"{f['plan']}__{f['curva']}__{f['clima']}__{f['firma']}".replace(" ", "_")
+        serie = dict(np.load(salida / "series" / f"{nombre}.npz"))
+        inf.fig_nucleo(serie, f"{f['plan']} · curva {f['curva']} · clima {f['clima']} (escenario de M_Δ mediano)",
+                       salida / f"nucleo_superficie_{f['plan']}.png", D_h=f["D_h"])
+    print("\nResultado:")
+    print(f"  {'plan':<10} {'D [h]':>7} {'P_T %':>7} {'P_Δ %':>7} {'P_f %':>7}  cumple")
+    for r in sorted(resumen, key=lambda r: r["D_h"]):
+        estado = "sí" if r["cumple"] else ("no" if r["completo"] else "incompleto")
+        print(f"  {r['plan']:<10} {r['D_h']:7.1f} {100 * r['P_T']:7.2f} {100 * r['P_D']:7.2f} {100 * r['P_f']:7.2f}  {estado}")
+    print("  " + (f"Propuesto: {dec['propuesto']}" if dec.get("propuesto") else
+                  f"Ningún plan evaluado cumple P_f <= 5 %. Menor riesgo: {dec['menor_riesgo']}"))
+    print(f"\nTablas y figuras en {salida}")
     return 0
 
 
@@ -1099,6 +1237,12 @@ def construir_parser() -> argparse.ArgumentParser:
             a.add_argument("--anios", type=int, nargs=2, default=[2016, 2025], metavar=("DESDE", "HASTA"))
             a.add_argument("--dias", type=int, default=14)
             a.add_argument("--margen", type=int, default=7, help="días extra a cada lado de la ventana")
+    a = acc.add_parser("ensemble", help="descarga todos los miembros del ensemble vigente (incertidumbre del clima)")
+    a.add_argument("--sitio", default="config/sitio.yaml")
+    a.add_argument("--carpeta", default="data/clima/snapshots")
+    a.add_argument("--indice", default="data/clima/indice.csv")
+    a.add_argument("--modelo", default="ecmwf_ifs025")
+    a.add_argument("--dias", type=int, default=15)
     a = acc.add_parser("info", help="muestra la metadata de un snapshot (y verifica su SHA-256)")
     a.add_argument("archivo")
     a = acc.add_parser("listar", help="lista los snapshots descargados (data/clima/indice.csv)")
@@ -1121,6 +1265,20 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--interactivo", action="store_true", help="abre una ventana para girar la vista")
     s.add_argument("--captura", help="guarda la vista en este PNG")
     s.set_defaults(func=cmd_vtk)
+
+    s = sub.add_parser("estudio", help="Decisión probabilística: planes × curvas × historias climáticas (E13/F02)")
+    s.add_argument("config", nargs="?", default="config/estudio.yaml")
+    s.add_argument("--dx", type=float, help="malla [m] (por defecto la del estudio)")
+    s.add_argument("--procesos", type=int, help="corridas en paralelo (por defecto, núcleos - 1)")
+    s.add_argument("--planes", nargs="+", help="sólo estos planes")
+    s.add_argument("--solo-preparar", action="store_true", help="sólo curvas, clima, cronogramas y sus figuras")
+    s.add_argument("--detalle", nargs=3, metavar=("PLAN", "CURVA", "CLIMA"), help="una corrida con cortes y VTK")
+    s.add_argument("--sensibilidad", nargs=3, metavar=("PLAN", "CURVA", "CLIMA"),
+                   help="sensibilidad numérica de un escenario (malla, paso de tiempo, profundidad)")
+    s.add_argument("--dx-variantes", type=float, nargs="+", default=[0.275, 0.11])
+    s.add_argument("--dt-variantes", type=float, nargs="+", default=[600, 300])
+    s.add_argument("--profundidades", type=float, nargs="+", default=[0.025, 0.05])
+    s.set_defaults(func=cmd_estudio)
 
     s = sub.add_parser("editor", help="Abre en el navegador un editor para cambiar datos y simular sin la terminal")
     s.add_argument("--puerto", type=int, default=8765)

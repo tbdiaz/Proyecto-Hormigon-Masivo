@@ -171,17 +171,19 @@ class Cubierta:
 class PlanCubiertas:
     cubiertas: list = field(default_factory=list)
 
-    def eventos(self, inicio_h) -> list[tuple]:
-        """(t_h, descripción) de cada retiro, en orden."""
+    def eventos(self, inicio_h, base_retiro_h=None) -> list[tuple]:
+        """(t_h, descripción) de cada retiro, en orden. El retiro se cuenta desde base_retiro_h
+        (fin de la colocación de cada vertida) o, si no se indica, desde inicio_h."""
+        base = inicio_h if base_retiro_h is None else base_retiro_h
         ev = []
         for c in self.cubiertas:
             for v in c.vertidas:
-                t = float(inicio_h[v - 1]) + float(c.retiro_h.get(v, np.inf))
+                t = float(base[v - 1]) + float(c.retiro_h.get(v, np.inf))
                 if np.isfinite(t):
                     ev.append((t, f"retiro de {c.tipo} ({c.capa.nombre}) de la Vertida_{v:02d}"))
         return sorted(ev)
 
-    def tabla(self, t_h, inicio_h, n_vertidas):
+    def tabla(self, t_h, inicio_h, n_vertidas, base_retiro_h=None):
         """Capas activas en t_h: (combo[v, orientación] -> índice, lista de combinaciones de capas).
 
         Fila 0 = sin vertida (suelo). Una combinación es una tupla de capas en serie,
@@ -189,13 +191,15 @@ class PlanCubiertas:
         """
         combos = [()]
         tabla = np.zeros((n_vertidas + 1, 3), dtype=np.int64)
+        base = inicio_h if base_retiro_h is None else base_retiro_h
         for v in range(1, n_vertidas + 1):
             t0 = float(inicio_h[v - 1])
             if not np.isfinite(t0) or t_h < t0 - 1e-9:
                 continue
+            tb = float(base[v - 1])
             for o in (SUP, LAT, INF):
                 capas = tuple(c.capa for c in self.cubiertas if v in c.vertidas and o in c.orientaciones
-                              and t_h < t0 + float(c.retiro_h.get(v, np.inf)) - 1e-9)
+                              and t_h < tb + float(c.retiro_h.get(v, np.inf)) - 1e-9)
                 if capas not in combos:
                     combos.append(capas)
                 tabla[v, o] = combos.index(capas)

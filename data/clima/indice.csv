@@ -1,3 +1,5 @@
 archivo,tipo,fuente,modelo,descargado_utc,horizonte_desde,horizonte_hasta,latitud,longitud,sha256
 pronostico_ecmwf_ifs025_20261107T1619Z.json,pronostico,Open-Meteo Forecast API,ecmwf_ifs025,2026-11-07T16:19:17Z,2026-11-07T00:00,2026-11-22T23:00,-34.105457,-71.649539,61db0a5858ebca9c7577591a927b8b9881215f663dc54343b0fbac37e77f940d
 era5_1127_2016-2025_20261107T1619Z.json,reanalisis,Open-Meteo Historical Weather API (ERA5),era5,2026-11-07T16:19:26Z,2016-11-20T00:00,2025-12-18T23:00,-34.105457,-71.649539,62d8c31805e33f28acf27536719f3039b6968ab3f7120999ef914c43991d0cf5
+ensemble_ecmwf_ifs025_20261112T2348Z.json,ensemble,Open-Meteo Ensemble API,ecmwf_ifs025,2026-11-12T23:48:49Z,2026-11-12T00:00,2026-11-26T23:00,-34.105457,-71.649539,ef9ac05737e499c64ebab3e39fdbb3efcbf39d54c1e150c96e5ef703ba2eaf95
+era5_1119_2016-2025_20261112T2348Z.json,reanalisis,Open-Meteo Historical Weather API (ERA5),era5,2026-11-12T23:48:55Z,2016-11-12T00:00,2025-12-24T23:00,-34.105457,-71.649539,83e41d8125cdebb4a0ffc6ed52fc35684774d200cb4bc3a00f5bd042f10ace3c

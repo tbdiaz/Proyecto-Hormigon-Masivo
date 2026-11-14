@@ -169,3 +169,13 @@ def test_panel_interactivo(ifc, tmp_path):
     campos = np.frombuffer(gzip.decompress(base64.b64decode(v["T"])), "<i2").reshape(len(v["tiempos"]), *v["forma"])
     ultimo = np.where(campos[-1] == v["sin_dato"], np.nan, campos[-1] / v["escala"])
     assert np.allclose(ultimo, res.campos[12.0], atol=0.03, equal_nan=True)  # s = 1: la misma malla, en pasos de 0,05 °C
+
+    # Vóxel de hormigón más caliente y más frío de cada instante (malla completa), para marcarlos en la vista 3D
+    assert len(v["extremos"]) == len(v["tiempos"])
+    ext = v["extremos"][-1]
+    Th = np.where(dom.material == HORMIGON, res.campos[12.0], np.nan)
+    assert ext["max"]["T"] == pytest.approx(np.nanmax(Th), abs=0.01) == pytest.approx(res.Tmax[-1], abs=0.01)
+    assert ext["min"]["T"] == pytest.approx(np.nanmin(Th), abs=0.01)
+    assert ext["max"]["v"] in (1, 2, 3) and ext["min"]["v"] in (1, 2, 3)
+    i, j, k = dom.indice(*ext["max"]["pos"])
+    assert res.campos[12.0][i, j, k] == pytest.approx(ext["max"]["T"], abs=0.01)

@@ -87,3 +87,24 @@ planes:
     cubiertas:
       moldaje: {retiro_h: 400}
       aislacion: {capa: manta_5cm, caras: todas, retiro_h: 400}
+  # Con tubos de enfriamiento: un serpentín a media altura de cada vertida (filas cada 1 m), agua a 10 °C
+  # durante 14 días desde el inicio de cada vertida. "TG": además hormigón con grafito (k = 4 W/mK) [SUPUESTO].
+  - nombre: unica-T
+    descripcion: vertida única con tubos HDPE en las 5 vertidas, agua a 10 °C
+    etapas: [[1, 2, 3, 4, 5]]
+    tubos: &tubos_hdpe
+      - {nombre: tubos_V1, vertida: 1, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V2, vertida: 2, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+  - nombre: unica-TG
+    descripcion: vertida única con tubos de cobre y hormigón con grafito (k = 4) en las 5 vertidas
+    etapas: [[1, 2, 3, 4, 5]]
+    materiales: {1: {k: 4.0}, 2: {k: 4.0}, 3: {k: 4.0}, 4: {k: 4.0}, 5: {k: 4.0}}
+    tubos:
+      - {nombre: tubos_V1, vertida: 1, material: cobre, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V2, vertida: 2, material: cobre, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V3, vertida: 3, material: cobre, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: cobre, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: cobre, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 10, durante_h: 336}

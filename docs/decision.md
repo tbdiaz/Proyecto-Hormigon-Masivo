@@ -7,7 +7,7 @@ $P_f = P(\{M_T > 70\,°C\} \cup \{M_\Delta > 20\,°C\}) \le 5\,\%$, bajo un mode
 
 ```powershell
 mcplan estudio --solo-preparar      # curvas, historias, cronogramas
-mcplan estudio                      # 9 planes x 8 curvas x 3 historias = 216 corridas (~45 min, 7 procesos)
+mcplan estudio                      # 11 planes x 8 curvas x 3 historias = 264 corridas (~55 min, 7 procesos)
 mcplan estudio --sensibilidad unica M4_22A fría --dx-variantes 0.275 0.11
 mcplan estudio --detalle unica M4_22A fría
 ```
@@ -185,8 +185,8 @@ La resolución de la búsqueda es de esperas de 12–24 h. Como ningún plan cum
 
 ## 7. Resultados
 
-Corrida del 12 nov con el ensemble descargado ese día (dx = 0,275 m): 9 planes × 24 escenarios = 216 corridas,
-unos 70 s cada una con 7 procesos.
+Corridas del 12 y 14 nov con el ensemble descargado el 12 (dx = 0,275 m): 11 planes × 24 escenarios = 264
+corridas, unos 70 s cada una con 7 procesos.
 
 | Plan | D [h] | P_T [%] | P_Δ [%] | P_f conjunta [%] | M_T [°C] (mín–máx) | M_Δ [°C] (mín–máx) | ¿Cumple? |
 |---|---|---|---|---|---|---|---|
@@ -199,8 +199,10 @@ unos 70 s cada una con 7 procesos.
 | 5V, espera 72 h | 311,6 | 100 | 100 | 100 | 88,4 – 141,3 | 75,8 – 126,8 | no |
 | 8C, espera 48 h | 359,6 | 100 | 100 | 100 | **75,9 – 135,2** | **62,7 – 121,5** | no |
 | 8C + protecciones, espera 48 h | 359,6 | 100 | 100 | 100 | 101,0 – 171,6 | 85,6 – 153,7 | no |
+| Única + tubos HDPE (agua 10 °C, 14 d) | 23,6 | 100 | 100 | 100 | 90,9 – 133,9 | 74,8 – 116,4 | no |
+| Única + tubos de cobre + grafito k = 4 | 23,6 | 100 | 100 | 100 | **80,9 – 114,7** | **66,1 – 99,7** | no |
 
-**No se encontró ningún plan factible.** Las 216 corridas exceden ambos límites, así que
+**No se encontró ningún plan factible.** Las 264 corridas exceden ambos límites, así que
 $P_T = P_\Delta = P_f = 100\,\%$ en todos los planes. La sensibilidad a los pesos (sólo SS, sólo 22A, historia fría
 con peso 0,5, historias equiprobables) no cambia nada.
 
@@ -243,6 +245,13 @@ con peso 0,5, historias equiprobables) no cambia nada.
 - **Clasificación:** ninguno de estos errores la cambia, porque los márgenes son de 30 a 150 °C. Con 0,11 m se
   resuelve que dx/2 = 55 mm > 25 mm, y la interpolación lineal en la media celda es la aproximación declarada.
 
+**Tubos de enfriamiento** ([docs/tubos.md](tubos.md)):
+- **Son la medida que más ayuda:** con cobre y hormigón con grafito, M_T baja 19–61 °C según la curva y M_Δ
+  16–64 °C. El agua extrae 93–167 GJ, más de la mitad del calor generado.
+- **No alcanzan con estas curvas:** con la curva más baja, M_T sigue en 81 °C.
+- **Generan un problema propio:** el ΔT hormigón–agua llega a 47–66 °C, muy por encima de lo que se acepta en obra.
+  Con estas fuentes, el agua a 10 °C sería un choque térmico alrededor del tubo.
+
 **Qué habría que cambiar.** Con estas curvas no basta con esperar ni con proteger. Habría que estudiar:
 - **la fuente:** confirmar la energía de las curvas (consulta 1);
 - **el calor de la mezcla:** menos cemento o cemento de bajo calor;
@@ -260,7 +269,7 @@ Ninguna de estas medidas está simulada. No se declaran validadas.
 | Las 8 curvas, archivos originales, unidades y antecedentes | `data/hidratacion/source_terms.txt` (encabezado con unidades, β y campañas); `curvas_hidratacion.png`; sección 2.1 |
 | Clima descargado: archivo, fuente, modelo, sitio, fechas, zona horaria, unidades, cobertura | `mcplan clima listar`; `mcplan clima info data/clima/snapshots/ensemble_...json`; `definicion.json` |
 | Propuesta de vertidas, parámetros, bordes y resultados preliminares | `config/estudio.yaml`, `config/caso_14d.yaml`, `resultados/estudio/resumen.md` |
-| Evidencia de verificación | `pytest` (153 tests); balance de energía por corrida; sensibilidad de malla, Δt y profundidad (sección 7) |
+| Evidencia de verificación | `pytest` (160 tests); balance de energía por corrida; sensibilidad de malla, Δt y profundidad (sección 7) |
 | Una fila por plan y escenario con pesos, M_T, M_Δ, I_T, I_Δ, I_F, instante y ubicación | `resultados/estudio/escenarios.csv` |
 | Tabla P_T, P_Δ, P_f y "¿cumple?" por plan; D vs P_f; cronogramas | `resumen.md`, `resumen_planes.csv`, `D_vs_Pf.png`, `cronogramas.png` |
 | Curvas núcleo/superficie, corte con instante y escala de colores | `nucleo_superficie_<plan>.png`; `detalle_*/cortes_y0.png`, `vista_3d.png` |

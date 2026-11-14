@@ -21,7 +21,10 @@ def base():
 
 
 def _form(base):
-    return copy.deepcopy(base)
+    """El formulario tal como lo manda el editor sin cambios: los valores del caso, sin tubos."""
+    f = copy.deepcopy(base)
+    f["tubos"] = []
+    return f
 
 
 def test_casos_y_valores_del_ifc(base):
@@ -79,3 +82,41 @@ def test_servidor_solo_acepta_su_propio_origen():
     finally:
         servidor.shutdown()
         servidor.server_close()
+
+
+def test_tubos_curva_y_k_por_vertida_desde_el_editor(base):
+    f = _form(base)
+    f["vertidas"][2]["k"] = 4.0
+    circuito = {"vertida": 3, "z": "", "material": "cobre", "direccion": "x", "separacion": 0.8, "diametro": 32,
+                "caudal": 25, "T_agua": 12, "dias": 10}
+    f["tubos"] = [circuito, {**circuito, "z": 1.4, "direccion": "y", "material": "pvc"}]
+    f["curva"] = "M4_22A"
+    args = construir_argumentos(f, base)
+    a = construir_parser().parse_args(["simular3d", "config/caso_14d.yaml", *args])
+    assert a.k_vertida == ["3=4"] and a.curva == "M4_22A" and len(a.tubo) == 2
+    assert "z=1.4" in a.tubo[1] and "material=pvc" in a.tubo[1] and not any(p.startswith("z=") for p in a.tubo[0])
+    for malo in ({"material": "oro"}, {"z": 0.2}, {"direccion": "z"}, {"vertida": 9}):
+        f["tubos"] = [{**circuito, **malo}]
+        with pytest.raises(ValueError):
+            construir_argumentos(f, base)
+    f["tubos"], f["curva"] = [], "inventada"
+    with pytest.raises(ValueError):
+        construir_argumentos(f, base)
+
+
+def test_simular3d_con_tubo_y_curva_medida(tmp_path):
+    """De punta a punta: un circuito a una altura dada, una curva del profesor y el panel con sus series."""
+    import json as js
+
+    from mcplan.cli import main
+
+    salida = tmp_path / "corrida"
+    assert main(["simular3d", "config/caso_14d.yaml", "--dx", "0.5", "--duracion", "30", "--sin-figuras",
+                 "--tubo", "vertida=3", "z=1.6", "material=cobre", "T_agua=10", "dias=1",
+                 "--curva", "M4_22A", "--salida", str(salida)]) == 0
+    r = js.loads((salida / "resumen.json").read_text(encoding="utf-8"))
+    assert list(r["tubos"]) == ["tubo1_V3"] and r["tubos"]["tubo1_V3"]["energia_MJ"] > 0
+    html = (salida / "panel.html").read_text(encoding="utf-8")
+    d = js.loads(html.split('id="datos">')[1].split("</script>")[0])
+    assert d["tubos"][0]["puntos"][0][2] == pytest.approx(1.6) and d["tubos_series"]["circuitos"][0]["potencia_kW"]
+    assert "M4_22A" in d["hidratacion"]["descripcion"]

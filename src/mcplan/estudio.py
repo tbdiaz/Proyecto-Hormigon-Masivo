@@ -28,7 +28,7 @@ EXTENSION_H = 168.0  # si un máximo cae al final del horizonte, se extiende una
 COLUMNAS = ["plan", "D_h", "curva", "clima", "w", "p_curva", "q_clima", "M_T", "t_MT_h", "x_MT", "y_MT", "z_MT",
             "M_D", "t_MD_h", "Tmax_en_MD", "Tmin_en_MD", "x_Tmin", "y_Tmin", "z_Tmin", "M_T_14d", "M_D_14d",
             "M_D_aristas", "I_T", "I_D", "I_F", "horizonte_h", "pico_al_final", "residuo_energia", "dx", "dt_s",
-            "segundos", "firma"]
+            "segundos", "E_tubos_MJ", "dT_agua_max", "firma"]
 
 
 # ---------------------------------------------------------------------------
@@ -161,7 +161,13 @@ def simular_tarea(tarea: dict, instantes_3d_h=()):
     caso, vox, dom = _base(tarea["caso"], tarea["dx"])
     caso = copy.deepcopy(caso)
     plan = PlanObra(tarea["plan"]["nombre"], [Etapa(**e) for e in tarea["plan"]["etapas"]],
-                    cubiertas=tarea["plan"]["cubiertas"])
+                    cubiertas=tarea["plan"]["cubiertas"], tubos=tarea["plan"].get("tubos") or [],
+                    materiales=tarea["plan"].get("materiales") or {})
+    from .tubos import circuito_desde_dict
+
+    for v, m in plan.materiales.items():
+        caso.materiales_cfg[int(v)] = {**caso.materiales_cfg.get(int(v), {}), **m}
+    circuitos = [circuito_desde_dict(dom, d, f"tubo{n + 1}") for n, d in enumerate(plan.tubos or caso.tubos_cfg)]
     for tipo, cambios in plan.cubiertas.items():
         caso.cubiertas_cfg[tipo] = {**caso.cubiertas_cfg.get(tipo, {}), **cambios}
     cubiertas = armar_cubiertas(caso, vox)
@@ -182,7 +188,8 @@ def simular_tarea(tarea: dict, instantes_3d_h=()):
     res = simular_3d(dom, PlanVertidas(vox), caso.hormigon, caso.suelo, fuente, amb, H,
                      T_suelo_inicial=lambda z: np.interp(-np.asarray(z), prof, Tz), guardar_cada_h=tarea["guardar_h"],
                      dt_max_s=tarea["dt_s"], cubiertas=cubiertas, profundidad_tmin=tarea["profundidad"],
-                     superficie_tmin="plana", activacion=act, puntos=caso.puntos, instantes_3d_h=instantes_3d_h)
+                     superficie_tmin="plana", activacion=act, puntos=caso.puntos, instantes_3d_h=instantes_3d_h,
+                     materiales_vertida=caso.materiales_vertida(), tubos=circuitos)
     res.plan = act  # para las figuras: qué vertidas existen en cada instante según este plan
     return res, crono
 
@@ -193,8 +200,10 @@ def _pico_al_final(res) -> bool:
 
 
 def _firma_plan(plan) -> str:
-    texto = json.dumps({"etapas": [asdict(e) for e in plan.etapas], "cubiertas": plan.cubiertas}, sort_keys=True,
-                       default=str)
+    datos = {"etapas": [asdict(e) for e in plan.etapas], "cubiertas": plan.cubiertas}
+    if plan.tubos or plan.materiales:  # (los planes sin tubos conservan la firma que ya tenían)
+        datos.update(tubos=plan.tubos, materiales={str(k): v for k, v in plan.materiales.items()})
+    texto = json.dumps(datos, sort_keys=True, default=str)
     return hashlib.sha256(texto.encode()).hexdigest()[:8]
 
 
@@ -221,7 +230,11 @@ def correr_escenario(tarea: dict) -> dict:
         "M_D_14d": float(np.nanmax(res.dT[en14])), "M_D_aristas": float(np.nanmax(res.Tmax - res.Tmin_todas)),
         "I_T": int(MT > LIMITE_T), "I_D": int(MD > LIMITE_D), "I_F": int(MT > LIMITE_T or MD > LIMITE_D),
         "horizonte_h": float(H), "pico_al_final": int(pico_final), "residuo_energia": res.balance["residuo_relativo"],
-        "dx": tarea["dx"], "dt_s": tarea["dt_s"], "segundos": time.perf_counter() - t_ini, "firma": tarea["firma"],
+        "dx": tarea["dx"], "dt_s": tarea["dt_s"], "segundos": time.perf_counter() - t_ini,
+        "E_tubos_MJ": -res.balance["tubos"] / 1e6,
+        "dT_agua_max": max([float(np.nanmax(s["dT_agua_max_C"])) for s in res.tubos.values()
+                            if np.isfinite(s["dT_agua_max_C"]).any()], default=0.0),
+        "firma": tarea["firma"],
     }
     serie = {"t_h": t, "Tmax": res.Tmax, "Tmin": res.Tmin_sup, "dT": res.dT, "T_amb": res.T_amb,
              "nucleo": res.puntos.get("nucleo_eje", np.full(t.shape, np.nan))}
@@ -247,7 +260,8 @@ def tareas(cfg, esc, dx, planes=None) -> list[dict]:
                 lista.append({
                     "caso": cfg["_caso"], "dx": dx, "plan": {"nombre": plan.nombre,
                                                              "etapas": [asdict(e) for e in plan.etapas],
-                                                             "cubiertas": plan.cubiertas},
+                                                             "cubiertas": plan.cubiertas, "tubos": plan.tubos,
+                                                             "materiales": plan.materiales},
                     "tasa": esc["tasa"], "curvas": cfg["_curvas"], "curva": curva, "opciones_curvas": opciones,
                     "clima": _clima_dict(h["clima"]), "clima_clave": h["clave"], "p": esc["p_curva"][curva],
                     "q": h["peso"], "w": esc["p_curva"][curva] * h["peso"], "suelo": esc["suelo"],
@@ -271,7 +285,7 @@ def leer_filas(ruta) -> list[dict]:
     for r in filas:
         for k in COLUMNAS:
             if k not in ("plan", "curva", "clima", "firma"):
-                r[k] = float(r[k])
+                r[k] = float(r.get(k) or 0.0)  # columnas agregadas después (p. ej. tubos) valen 0 en filas antiguas
     return filas
 
 
@@ -280,7 +294,16 @@ def ejecutar(cfg, esc, dx, procesos=None, planes=None, informar=print) -> list[d
     salida = Path(cfg["_salida"])
     (salida / "series").mkdir(parents=True, exist_ok=True)
     ruta = salida / "escenarios.csv"
-    hechas = {_clave(f) for f in leer_filas(ruta)}
+    anteriores = leer_filas(ruta)
+    if ruta.exists():
+        with open(ruta, encoding="utf-8") as fh:
+            encabezado = fh.readline().strip().split(",")
+        if encabezado != COLUMNAS:  # el CSV tiene columnas de una versión anterior: se reescribe con las nuevas
+            with open(ruta, "w", newline="", encoding="utf-8") as fh:
+                w = csv.DictWriter(fh, COLUMNAS)
+                w.writeheader()
+                w.writerows({k: f.get(k, 0) for k in COLUMNAS} for f in anteriores)
+    hechas = {_clave(f) for f in anteriores}
     pendientes = [t for t in tareas(cfg, esc, dx, planes)
                   if (t["plan"]["nombre"], t["curva"], t["clima_clave"], t["firma"]) not in hechas]
     total = len(tareas(cfg, esc, dx, planes))

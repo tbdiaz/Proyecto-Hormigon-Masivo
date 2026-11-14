@@ -652,3 +652,23 @@ def graficar_clima(clima, ruta, titulo=None):
     fig.tight_layout()
     fig.savefig(ruta, dpi=150)
     plt.close(fig)
+
+
+def graficar_tubos(res, ruta):
+    """Potencia extraída y temperatura del agua a la salida de cada circuito, con el ΔT hormigón-agua."""
+    fig, (a1, a2) = plt.subplots(2, 1, figsize=(10, 6.5), sharex=True)
+    for n, (nombre, s) in enumerate(res.tubos.items()):
+        color = _COLORES_VERTIDA[n % 6]
+        a1.plot(s["t_h"], np.asarray(s["potencia_W"]) / 1000, color=color, lw=1.6, label=nombre)
+        a2.plot(s["t_h"], s["T_salida_C"], color=color, lw=1.6, label=f"{nombre}: agua a la salida")
+        a2.plot(s["t_h"], s["dT_agua_max_C"], color=color, lw=1, ls="--", label=f"{nombre}: ΔT hormigón-agua máx.")
+    a1.set_ylabel("calor extraído [kW]")
+    a1.set_title("Tubos de enfriamiento", fontsize=10)
+    a2.set_ylabel("T [°C]")
+    a2.set_xlabel("t [h]")
+    for ax in (a1, a2):
+        ax.grid(alpha=0.3)
+        ax.legend(fontsize=8)
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=150)
+    plt.close(fig)

@@ -41,6 +41,8 @@ class PlanObra:
     etapas: list
     descripcion: str = ""
     cubiertas: dict = field(default_factory=dict)  # cambios a `moldaje`/`aislacion` del caso para este plan
+    tubos: list = field(default_factory=list)  # circuitos de enfriamiento (ver tubos.circuito_desde_dict)
+    materiales: dict = field(default_factory=dict)  # {vertida: {k, rho, cp}} hormigón distinto por vertida
 
     def resumen(self) -> str:
         partes = []
@@ -136,7 +138,8 @@ def plan_desde_dict(d: dict, T_colocacion: float) -> PlanObra:
                             z=None if e.get("z") is None else tuple(float(x) for x in e["z"]),
                             nombre=str(e.get("nombre", ""))))
     return PlanObra(nombre=str(d["nombre"]), etapas=etapas, descripcion=str(d.get("descripcion", "")),
-                    cubiertas=dict(d.get("cubiertas") or {}))
+                    cubiertas=dict(d.get("cubiertas") or {}), tubos=list(d.get("tubos") or []),
+                    materiales={int(str(v).replace("Vertida_", "")): dict(m) for v, m in (d.get("materiales") or {}).items()})
 
 
 def expandir_familias(planes_cfg: list, T_colocacion: float) -> list[PlanObra]:
@@ -153,7 +156,9 @@ def expandir_familias(planes_cfg: list, T_colocacion: float) -> list[PlanObra]:
                     etapas.append(e)
                 planes.append(plan_desde_dict({"nombre": f"{d['familia']}-e{w:g}", "etapas": etapas,
                                                "descripcion": f"{d.get('descripcion', d['familia'])}, espera {w:g} h",
-                                               "cubiertas": d.get("cubiertas")}, d.get("T_colocacion", T_colocacion)))
+                                               "cubiertas": d.get("cubiertas"), "tubos": d.get("tubos"),
+                                               "materiales": d.get("materiales")},
+                                              d.get("T_colocacion", T_colocacion)))
         else:
             planes.append(plan_desde_dict(d, d.get("T_colocacion", T_colocacion)))
     nombres = [p.nombre for p in planes]

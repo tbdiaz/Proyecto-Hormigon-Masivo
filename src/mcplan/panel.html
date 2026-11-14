@@ -65,6 +65,7 @@ svg { display: block; width: 100%; }
 .leyenda button[aria-pressed=false] { opacity: .45; }
 .leyenda button[aria-pressed=true] { background: transparent; color: var(--texto); border-color: var(--linea); }
 .clave { width: 14px; height: 2px; display: inline-block; }
+.marca { width: 11px; height: 11px; display: inline-block; border-radius: 2px; vertical-align: -1px; margin-right: 4px; }
 #tip { position: fixed; pointer-events: none; display: none; z-index: 10; background: var(--tarjeta); border: 1px solid var(--linea); border-radius: 6px; padding: 7px 10px; font-size: 12.5px; box-shadow: 0 2px 10px rgba(0,0,0,.18); }
 #tip div { display: flex; align-items: center; gap: 6px; white-space: nowrap; }
 #tip b { font-weight: 650; min-width: 44px; }
@@ -113,13 +114,17 @@ pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radiu
         <h2>Vista 3D</h2>
         <div class="fila">
           <label class="check"><input type="checkbox" id="cortar" checked> Cortar un cuarto</label>
+          <label class="check" id="lblTubos" hidden><input type="checkbox" id="verTubos" checked> Tubos</label>
+          <label class="check" id="lblExtremos" hidden><input type="checkbox" id="verExtremos" checked> Más caliente / más fría</label>
           <label class="check">Escala z <select id="escalaZ"><option value="1">1×</option><option value="2" selected>2×</option></select></label>
           <button id="reset" type="button">Reiniciar vista</button>
         </div>
       </div>
       <canvas id="c3d" role="img" aria-label="Vista 3D de la fundación coloreada por temperatura. Arrastra para girar y usa la rueda para acercar."></canvas>
+      <div class="lectura" id="lecturaExtremos"></div>
       <div class="fila" id="togglesV" style="margin-top:6px"></div>
       <p class="nota">Arrastra para girar y usa la rueda para acercar. Las casillas sólo ocultan la vertida en esta vista; para no construirla en el cálculo usa <code>--ocultar</code>.</p>
+      <p class="nota" id="notaExtremos" hidden>El cubo rojo es la celda de hormigón más caliente del instante y el verde la más fría, buscadas en la malla completa entre todo el hormigón ya colocado (aunque esté oculto o cortado en la vista). Se dibujan encima del modelo para que se vean aunque estén adentro. La más fría suele estar en una arista; no es la Tmin del criterio de ΔT, que se mide a 25 mm bajo las caras planas.</p>
     </div>
     <div class="tarjeta">
       <div class="fila espacio">
@@ -177,6 +182,16 @@ pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radiu
       <h2>Puntos de control</h2>
       <div class="tabla" id="tablaPuntos"></div>
     </div>
+    <div class="tarjeta ancho" id="tarjetaTubos" hidden>
+      <h2>Tubos de enfriamiento</h2>
+      <div class="leyenda" id="leyendaTubos"></div>
+      <div class="vistas">
+        <div><div class="sub">Calor extraído por circuito [kW]</div><svg id="graficoPotencia" role="img" aria-label="Calor extraído por cada circuito en el tiempo"></svg></div>
+        <div><div class="sub">Agua a la salida (continua) y ΔT hormigón–agua máximo (trazos) [°C]</div><svg id="graficoAgua" role="img" aria-label="Temperatura del agua a la salida y diferencia máxima hormigón-agua"></svg></div>
+      </div>
+      <div class="tabla" id="tablaTubos"></div>
+      <p class="nota">El ΔT hormigón–agua es la mayor diferencia entre una celda y el agua que pasa por ella. En obra se limita (del orden de 20 °C, línea discontinua) para no fisurar el hormigón alrededor del tubo.</p>
+    </div>
     <div class="tarjeta ancho">
       <h2>Comando de esta corrida</h2>
       <pre><code id="comando"></code></pre>
@@ -230,7 +245,11 @@ async function descomprimir(b64) {
   const crudo = Uint8Array.from(atob(b64), c => c.charCodeAt(0));
   return new Response(new Blob([crudo]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
-const est = { fr: 0, plano: "xz", pos: { xz: 0, yz: 0, xy: 0 }, cortar: true, zs: 2, yaw: -0.85, pitch: 0.55, zoom: 1, vis: D.vertidas.map(() => true), curvas: "global", ocultas: new Set() };
+const est = { fr: 0, plano: "xz", pos: { xz: 0, yz: 0, xy: 0 }, cortar: true, zs: 2, yaw: -0.85, pitch: 0.55, zoom: 1, vis: D.vertidas.map(() => true), curvas: "global", ocultas: new Set(),
+              tubos: true, extremos: true };
+// Vóxel más caliente (rojo fuerte) y más frío (verde) del instante: [clave, color, etiqueta]
+const EXTREMOS = [["max", [235, 0, 0], "Más caliente"], ["min", [0, 205, 70], "Más fría"]];
+const extremosAhora = () => (V.extremos && V.extremos[est.fr]) || null;
 const valor = (fr, c) => CAMPOS[fr * NCEL + c];
 const indiceSerie = t => { let m = 0, dm = Infinity; D.series.t.forEach((x, i) => { const d = Math.abs(x - t); if (d < dm) { dm = d; m = i; } }); return m; };
 const tActual = () => V.tiempos[est.fr];
@@ -310,6 +329,51 @@ function dibujar3D() {
     g.fillStyle = col; g.strokeStyle = col;
     g.fill(); g.stroke();
   }
+  const pantalla = (x, y, z) => { const Z = (z - zc) * zs; return [ox + U(x, y) * esc, oy - (Y2(x, y) * sp + Z * cp) * esc]; };
+  // Tubos de enfriamiento (se dibujan encima: vista "de rayos X")
+  if (est.tubos && D.tubos && D.tubos.length) {
+    g.strokeStyle = "#00c8ff"; g.lineWidth = 1.6;
+    for (const tubo of D.tubos) {
+      g.beginPath();
+      tubo.puntos.forEach(([x, y, z], i) => { const [su, sv] = pantalla(x, y, z); i ? g.lineTo(su, sv) : g.moveTo(su, sv); });
+      g.stroke();
+    }
+  }
+  // Vóxel más caliente y más frío: un cubo de color fuerte con un anillo y su temperatura, encima de todo
+  const ext = extremosAhora();
+  if (est.extremos && ext) {
+    g.save();
+    const mc = Math.max(V.d / 2, 6 / esc);  // al menos ~12 px de lado para que se vea
+    for (const [clave, rgb, nombre] of EXTREMOS) {
+      const e = ext[clave], [x, y, z] = e.pos;
+      g.lineWidth = 1;
+      for (let d = 0; d < 6; d++) {
+        if (!normalVista[d]) continue;
+        const eje = d >> 1, s = d & 1 ? 1 : -1, [e1, e2] = eje === 0 ? [1, 2] : eje === 1 ? [0, 2] : [0, 1];
+        g.beginPath();
+        [[-1,-1],[1,-1],[1,1],[-1,1]].forEach((P, q) => {
+          const a = [0, 0, 0]; a[eje] = s * mc; a[e1] = P[0] * mc; a[e2] = P[1] * mc;
+          const [su, sv] = pantalla(x + a[0], y + a[1], z + a[2]);
+          q ? g.lineTo(su, sv) : g.moveTo(su, sv);
+        });
+        g.closePath();
+        g.fillStyle = `rgb(${rgb.map(c => c * SOMBRA[d] | 0).join(",")})`; g.fill();
+        g.strokeStyle = "rgba(255,255,255,.9)"; g.stroke();
+      }
+      const [su, sv] = pantalla(x, y, z), r = mc * esc * Math.max(1, zs) + 7, col = `rgb(${rgb.join(",")})`;
+      g.beginPath(); g.arc(su, sv, r, 0, 2 * Math.PI);
+      g.strokeStyle = "#fff"; g.lineWidth = 4; g.stroke();
+      g.strokeStyle = col; g.lineWidth = 2; g.stroke();
+      const texto = `${nombre}: ${fmt(e.T)} °C`;
+      g.font = "600 12px system-ui"; g.textBaseline = "middle"; g.textAlign = "left";
+      const ancho = g.measureText(texto).width + 12, izq = su + r + ancho + 4 > w;
+      const lx = izq ? su - r - 4 - ancho : su + r + 4, ly = clave === "max" ? sv - r : sv + r;
+      g.fillStyle = css("--tarjeta"); g.strokeStyle = col; g.lineWidth = 1.5;
+      g.beginPath(); g.roundRect ? g.roundRect(lx, ly - 10, ancho, 20, 4) : g.rect(lx, ly - 10, ancho, 20); g.fill(); g.stroke();
+      g.fillStyle = css("--texto"); g.fillText(texto, lx + 6, ly + 0.5);
+    }
+    g.restore();
+  }
   // Ejes
   const O = [34, h - 34], L = 20, tinta = css("--texto2");
   g.font = "11px system-ui"; g.fillStyle = tinta; g.strokeStyle = tinta; g.lineWidth = 1.2;
@@ -383,6 +447,33 @@ function dibujarCorte() {
   g.textAlign = "center"; g.textBaseline = "bottom";
   g.fillText(nom[pl.u] + " [m]", x0 + ancho / 2, Math.min(h, y0 + alto + 30));
   g.save(); g.translate(10, y0 + alto / 2); g.rotate(-Math.PI / 2); g.textBaseline = "middle"; g.fillText(nom[pl.v] + " [m]", 0, 0); g.restore();
+  // Tubos que cruzan este plano (a menos de media celda): puntos celestes
+  if (D.tubos && D.tubos.length) {
+    const fijo = centro(pl.fijo, f);
+    g.fillStyle = "#00c8ff";
+    for (const tubo of D.tubos) for (let i = 0; i + 1 < tubo.puntos.length; i++) {
+      const a = tubo.puntos[i], b = tubo.puntos[i + 1];
+      const n = Math.max(1, Math.ceil(Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]) / (V.d / 3)));
+      for (let s = 0; s <= n; s++) {
+        const p = a.map((c, e) => c + (b[e] - c) * s / n);
+        if (Math.abs(p[pl.fijo] - fijo) > V.d / 2) continue;
+        g.fillRect(x0 + (p[pl.u] - V.origen[pl.u]) * px - 1.5, y0 + alto - (p[pl.v] - V.origen[pl.v]) * px - 1.5, 3, 3);
+      }
+    }
+  }
+  // Vóxel más caliente / más frío, si el plano pasa por él (a menos de media celda de la vista)
+  const ext = extremosAhora();
+  if (est.extremos && ext) {
+    const fijo = centro(pl.fijo, f);
+    for (const [clave, rgb] of EXTREMOS) {
+      const p = ext[clave].pos;
+      if (Math.abs(p[pl.fijo] - fijo) > V.d / 2) continue;
+      const X = x0 + (p[pl.u] - V.origen[pl.u]) * px, Y = y0 + alto - (p[pl.v] - V.origen[pl.v]) * px;
+      g.beginPath(); g.arc(X, Y, Math.max(6, d * px * 0.9), 0, 2 * Math.PI);
+      g.strokeStyle = "#fff"; g.lineWidth = 4; g.stroke();
+      g.strokeStyle = `rgb(${rgb.join(",")})`; g.lineWidth = 2.2; g.stroke();
+    }
+  }
   geomCorte = { x0, y0, ancho, alto, px, nu, nv, pl, f };
   $("posTexto").textContent = `${pl.etq} = ${fmt(centro(pl.fijo, f), 2)} m`;
 }
@@ -423,6 +514,69 @@ function seriesActuales() {
   if (est.curvas === "vertidas") return D.vertidas.map((v, i) => ({ id: "v" + i, n: "Tmax " + v.nombre, T: S.vertidas[i], c: color(i + 1) }));
   return S.puntos.map((p, i) => ({ id: "p" + i, n: p.nombre.replaceAll("_", " "), T: p.T, c: color(i % 8 + 1) }));
 }
+// ---------- Tubos: dos gráficos pequeños (un eje cada uno) con lectura al pasar el puntero ----------
+function graficoSimple(svg, t, series, opciones = {}) {
+  const W = Math.max(280, svg.getBoundingClientRect().width), H = 230, m = { l: 40, r: 10, t: 8, b: 28 };
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.setAttribute("height", H); svg.replaceChildren();
+  let hi = opciones.referencia ? opciones.referencia + 5 : 1, lo = 0;
+  for (const s of series) for (const v of s.y) if (v !== null) { hi = Math.max(hi, v); lo = Math.min(lo, v); }
+  const paso = hi > 100 ? 20 : hi > 40 ? 10 : 5;
+  hi = Math.ceil(hi / paso) * paso; lo = Math.floor(lo / paso) * paso;
+  const tMax = t[t.length - 1] || 1;
+  const X = x => m.l + x / tMax * (W - m.l - m.r), Y = y => H - m.b - (y - lo) / (hi - lo || 1) * (H - m.t - m.b);
+  for (let y = lo; y <= hi; y += paso) {
+    svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(y), y2: Y(y), stroke: "var(--grilla)" }));
+    const e = sv("text", { x: m.l - 5, y: Y(y) + 4, "text-anchor": "end", fill: "var(--texto3)", "font-size": 11 }); e.textContent = y; svg.append(e);
+  }
+  const pt = tMax > 200 ? 48 : tMax > 72 ? 24 : 12;
+  for (let x = 0; x <= tMax; x += pt) {
+    const e = sv("text", { x: X(x), y: H - m.b + 15, "text-anchor": "middle", fill: "var(--texto3)", "font-size": 11 }); e.textContent = x; svg.append(e);
+  }
+  if (opciones.referencia) svg.append(sv("line", { x1: m.l, x2: W - m.r, y1: Y(opciones.referencia), y2: Y(opciones.referencia), stroke: "var(--texto2)", "stroke-dasharray": "5 4" }));
+  for (const s of series) {
+    let d = "", abierto = false;
+    s.y.forEach((v, i) => { if (v === null) { abierto = false; return; } d += `${abierto ? "L" : "M"}${X(t[i]).toFixed(1)} ${Y(v).toFixed(1)}`; abierto = true; });
+    svg.append(sv("path", { d, fill: "none", stroke: s.c, "stroke-width": 2, "stroke-dasharray": s.trazos ? "5 3" : "none" }));
+  }
+  const cruz = sv("line", { y1: m.t, y2: H - m.b, stroke: "var(--texto2)", visibility: "hidden" }); svg.append(cruz);
+  svg.onpointermove = e => {
+    const r = svg.getBoundingClientRect(), x = ((e.clientX - r.left) * W / r.width - m.l) / (W - m.l - m.r) * tMax;
+    let i = 0, dm = Infinity; t.forEach((v, k) => { const d = Math.abs(v - x); if (d < dm) { dm = d; i = k; } });
+    cruz.setAttribute("x1", X(t[i])); cruz.setAttribute("x2", X(t[i])); cruz.setAttribute("visibility", "visible");
+    const tip = $("tip");
+    tip.replaceChildren(el("div", {}, el("span", {}, `t = ${fmt(t[i], 0)} h`)),
+      ...series.map(s => el("div", {}, el("i", { class: "clave", style: `background:${s.c}` }), el("b", {}, s.y[i] === null ? "—" : `${fmt(s.y[i])} ${opciones.unidad}`), el("span", {}, s.n))));
+    tip.style.display = "block";
+    tip.style.left = (e.clientX + 16 + tip.offsetWidth > innerWidth ? e.clientX - tip.offsetWidth - 12 : e.clientX + 16) + "px";
+    tip.style.top = Math.max(8, e.clientY - 20) + "px";
+  };
+  svg.onpointerleave = () => { $("tip").style.display = "none"; cruz.setAttribute("visibility", "hidden"); };
+}
+function dibujarTubos() {
+  const T = D.tubos_series;
+  if (!T || !T.circuitos.length) return;
+  const color = i => `var(--s${i % 8 + 1})`;
+  graficoSimple($("graficoPotencia"), T.t, T.circuitos.map((c, i) => ({ n: c.nombre, y: c.potencia_kW, c: color(i) })), { unidad: "kW" });
+  graficoSimple($("graficoAgua"), T.t, T.circuitos.flatMap((c, i) => [
+    { n: `${c.nombre}: agua a la salida`, y: c.T_salida, c: color(i) },
+    { n: `${c.nombre}: ΔT hormigón–agua`, y: c.dT_agua, c: color(i), trazos: true }]), { unidad: "°C", referencia: 20 });
+}
+function iniciarTubos() {
+  const T = D.tubos_series;
+  if (!T || !T.circuitos.length) return;
+  $("tarjetaTubos").hidden = false;
+  $("leyendaTubos").replaceChildren(...T.circuitos.map((c, i) => el("span", { class: "fila" }, el("span", { class: "clave", style: `background:var(--s${i % 8 + 1})` }), c.nombre)));
+  const max = a => Math.max(...a.filter(v => v !== null), -Infinity);
+  tabla($("tablaTubos"), [
+    { t: "Circuito", v: c => c.nombre }, { t: "Material", v: c => (D.tubos.find(x => x.nombre === c.nombre) || {}).material || "—" },
+    { t: "Largo [m]", n: 1, v: c => fmt((D.tubos.find(x => x.nombre === c.nombre) || {}).largo_m, 0) },
+    { t: "Potencia máx. [kW]", n: 1, v: c => fmt(max(c.potencia_kW)) }, { t: "Energía extraída [MJ]", n: 1, v: c => fmt(c.energia_MJ, 0) },
+    { t: "Agua a la salida máx. [°C]", n: 1, v: c => fmt(max(c.T_salida)) },
+    { t: "ΔT hormigón–agua máx. [°C]", n: 1, v: c => { const v = max(c.dT_agua); return v > 20 ? `${fmt(v)} ⚠` : fmt(v); } },
+  ], T.circuitos);
+  dibujarTubos();
+}
+
 const NS = "http://www.w3.org/2000/svg";
 const sv = (tag, a = {}) => { const e = document.createElementNS(NS, tag); for (const k in a) e.setAttribute(k, a[k]); return e; };
 let geomCurvas = null;
@@ -505,7 +659,17 @@ function ponerInstante(fr) {
     item("Tmax:", `${fmt(S.Tmax[i])} °C`), item("ΔT:", `${fmt(S.dT[i])} °C`), item("T ambiente:", `${fmt(S.T_amb[i])} °C`));
   for (const fila of document.querySelectorAll("[data-punto]")) fila.textContent = `${fmt(S.puntos[+fila.dataset.punto].T[i])} °C`;
   if (geomCurvas) { geomCurvas.ahora.setAttribute("x1", geomCurvas.X(t)); geomCurvas.ahora.setAttribute("x2", geomCurvas.X(t)); }
+  leerExtremos();
   construirCaras(); pedir(dibujar3D); pedir(dibujarCorte);
+}
+function leerExtremos() {
+  const ext = extremosAhora(), nodo = $("lecturaExtremos");
+  if (!ext || !est.extremos) { nodo.replaceChildren(); return; }
+  nodo.replaceChildren(...EXTREMOS.map(([clave, rgb, nombre]) => {
+    const e = ext[clave], vert = e.v > 0 ? D.vertidas[e.v - 1].nombre : "—";
+    return el("span", {}, el("i", { class: "marca", style: `background:rgb(${rgb.join(",")})` }), `${nombre}: `,
+              el("b", {}, `${fmt(e.T)} °C`), ` en (${e.pos.map(c => fmt(c, 2)).join("; ")}) m · ${vert}`);
+  }));
 }
 let reproduccion = null;
 $("play").onclick = () => {
@@ -549,6 +713,8 @@ function contenido() {
   amb.append(el("p", {}, el("b", {}, "Superficie: "), A.descripcion), el("p", {}, el("b", {}, "Temperatura del aire: "), A.T_amb),
              el("p", {}, el("b", {}, "Criterio de ΔT: "), A.criterio_Tmin));
   for (const linea of A.cubiertas) amb.append(el("p", {}, el("b", {}, "Capa: "), linea));
+  for (const t of D.tubos || []) amb.append(el("p", {}, el("b", {}, "Tubo: "),
+    `${t.nombre}: ${t.material}, ${fmt(t.largo_m, 0)} m, ${fmt(t.caudal_l_min, 0)} L/min, agua a ${fmt(t.T_agua_C)} °C; potencia máxima ${fmt(t.potencia_max_kW)} kW (celeste en la vista 3D y en los cortes)`));
   if (D.retiros.length) amb.append(el("p", {}, el("b", {}, "Retiros: "), D.retiros.map(r => `${fmt(r.t, 0)} h: ${r.evento}`).join("; ")));
   if (A.clima) {
     const C = A.clima, lista = [`desde ${A.fecha_inicio} (hora local ${C.zona_horaria})`,
@@ -563,7 +729,7 @@ function contenido() {
     { t: "c_p [J/kgK]", n: 1, v: f => fmt(f.cp, 0) }, { t: "α [m²/s]", n: 1, v: f => f.alpha.toExponential(2).replace(".", ",") },
   ], D.materiales);
   const H = D.hidratacion;
-  $("notaHidratacion").textContent = `Hidratación: curva adiabática de Ju y Lei (2019), con E_h/R = ${fmt(H.Eh_R, 0)} K y T_ref = ${fmt(H.T_ref, 0)} °C. Cada celda lleva su propia edad equivalente.`;
+  $("notaHidratacion").textContent = `Hidratación: ${H.descripcion}.`;
   tabla($("tablaVertidas"), [
     { t: "Vertida", v: f => f.nombre },
     { t: "Inicio [h]", n: 1, v: f => f.inicio_h === null ? "oculta" : fmt(f.inicio_h) },
@@ -605,6 +771,14 @@ function contenido() {
     $("vistasCurvas").append(bt);
   }
   $("cortar").onchange = e => { est.cortar = e.target.checked; construirCaras(); pedir(dibujar3D); };
+  if (D.tubos && D.tubos.length) {
+    $("lblTubos").hidden = false;
+    $("verTubos").onchange = e => { est.tubos = e.target.checked; pedir(dibujar3D); };
+  }
+  if (V.extremos && V.extremos.some(x => x)) {
+    $("lblExtremos").hidden = false; $("notaExtremos").hidden = false;
+    $("verExtremos").onchange = e => { est.extremos = e.target.checked; leerExtremos(); pedir(dibujar3D); pedir(dibujarCorte); };
+  }
   $("escalaZ").onchange = e => { est.zs = +e.target.value; pedir(dibujar3D); };
   $("reset").onclick = () => { est.yaw = -0.85; est.pitch = 0.55; est.zoom = 1; pedir(dibujar3D); };
   $("pos").addEventListener("input", e => { est.pos[est.plano] = +e.target.value; dibujarCorte(); });
@@ -628,7 +802,8 @@ function contenido() {
   V.tiempos.forEach((x, i) => { const d = Math.abs(x - D.resultado.t_Tmax); if (d < dm) { dm = d; inicial = i; } });
   ponerInstante(inicial);
   dibujarCurvas();
-  new ResizeObserver(() => { pedir(dibujar3D); pedir(dibujarCorte); pedir(dibujarCurvas); }).observe(document.querySelector("main"));
+  new ResizeObserver(() => { pedir(dibujar3D); pedir(dibujarCorte); pedir(dibujarCurvas); pedir(dibujarTubos); }).observe(document.querySelector("main"));
+  iniciarTubos();
 })();
 </script>
 </body>

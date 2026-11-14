@@ -70,6 +70,12 @@ aislacion:
   caras: superiores
   retiro_h: 168
 
+# Tubos de enfriamiento (ver docs/tubos.md). Ejemplo, descomentar para usar:
+# tubos:
+#   - {nombre: serpentin_V3, vertida: 3, serpentin: {separacion: 1.0}, material: hdpe, caudal_l_min: 20,
+#      T_agua_C: 10, durante_h: 168}
+# Hormigón distinto en una vertida (p. ej. con grafito): materiales.hormigon.por_vertida: {Vertida_03: {k: 4.0}}
+
 # Cambios a la secuencia del IFC (vacío = 0/6/12/18/24 h y 18 °C, como en el IFC).
 vertidas: {}
 

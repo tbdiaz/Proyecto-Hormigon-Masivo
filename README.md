@@ -63,8 +63,8 @@ y cada corrida queda en `resultados/editor/`. No modifica los YAML ni el IFC.
 ## Uso rápido
 
 ```powershell
-pytest                                            # 153 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
-pytest -m "not lento"                             # la batería rápida (149 tests, ~1 min)
+pytest                                            # 160 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
+pytest -m "not lento"                             # la batería rápida (156 tests, ~1 min)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
@@ -229,6 +229,7 @@ src/mcplan/
   curvas.py          curvas de hidratación medidas -> fuente por edad (rampa inicial, suavizado, cola)
   planes.py          planes de obra: etapas, esperas, tasa de colocación, D y activación por capas
   estudio.py, informe_estudio.py  decisión: planes x curvas x clima, P_T, P_Δ, P_f, tablas y figuras
+  tubos.py           tubos de enfriamiento: sumidero por celda (Peaceman), agua que se calienta a lo largo del tubo
   vtk_io.py          exportación VTK (.vti/.pvd) para ParaView y vista con PyVista (slice, clipping)
   vista3d.py         vista 3D con un cuarto cortado (PNG)
   panel.py, panel.html  panel interactivo de cada corrida: Δx, Δt, β de los bordes, vista 3D, cortes y curvas
@@ -271,7 +272,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 153 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 160 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |
@@ -283,6 +284,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Simulación determinista de 14 días (E12) | ✅ [docs/simulacion_14d.md](docs/simulacion_14d.md) |
 | Decisión probabilística: 8 curvas x 3 historias (ensemble), P_f conjunta, familia de planes | ✅ `mcplan estudio` |
 | HPC | no se usa: enumeración ponderada en paralelo en el computador local |
+| Tubos de enfriamiento (PVC/HDPE/acero/cobre) y hormigón distinto por vertida | ✅ [docs/tubos.md](docs/tubos.md), editor y estudio |
 
 ## Supuestos vigentes
 

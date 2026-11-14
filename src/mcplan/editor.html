@@ -65,6 +65,9 @@ pre { max-height: 220px; overflow: auto; font: 12px/1.4 ui-monospace, Consolas, 
 iframe { flex: 1; width: 100%; min-height: 0; border: 0; background: var(--fondo); }
 .vacio { flex: 1; display: flex; align-items: center; justify-content: center; text-align: center; color: var(--texto2); padding: 24px; }
 [hidden] { display: none !important; }
+.circuito { border: 1px solid var(--linea); border-radius: 6px; padding: 8px 10px 4px; margin-bottom: 8px; background: var(--fondo); }
+.circuito button { margin: 2px 0 6px; min-height: 28px; padding: 3px 10px; }
+#agregarTubo { width: 100%; }
 @media (max-width: 800px) {
   html, body { height: auto; }
   .app { display: block; height: auto; }
@@ -149,13 +152,28 @@ function construir() {
   const filas = b.vertidas.map(v => {
     const activa = el("input", { type: "checkbox", id: `v${v.id}_activa`, checked: v.activa });
     const inicio = campoNumero(`v${v.id}_inicio`, v.inicio_h, 0, 720, 1), T = campoNumero(`v${v.id}_T`, v.T_colocacion, -5, 45, 0.5);
+    const kv = campoNumero(`v${v.id}_k`, v.k, 0.5, 20, 0.1);
+    kv.setAttribute("aria-label", `${v.nombre}: conductividad del hormigón`);
     inicio.setAttribute("aria-label", `${v.nombre}: inicio en horas`);
     T.setAttribute("aria-label", `${v.nombre}: temperatura de colocación`);
     const actualizar = () => { inicio.disabled = T.disabled = !activa.checked; };
     activa.addEventListener("change", actualizar); actualizar();
-    return el("tr", {}, el("td", {}, el("label", { className: "check" }, activa, v.nombre.replace("Vertida_0", "V"))), el("td", {}, inicio), el("td", {}, T));
+    return el("tr", {}, el("td", {}, el("label", { className: "check" }, activa, v.nombre.replace("Vertida_0", "V"))), el("td", {}, inicio), el("td", {}, T), el("td", {}, kv));
   });
-  f.append(grupo("Vertidas", el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Construir"), el("th", {}, "Inicio [h]"), el("th", {}, "T col. [°C]"))), el("tbody", {}, ...filas))));
+  f.append(grupo("Vertidas", el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Construir"), el("th", {}, "Inicio [h]"), el("th", {}, "T col. [°C]"), el("th", {}, "k [W/mK]"))), el("tbody", {}, ...filas)),
+    el("p", { className: "nota" }, "k: conductividad del hormigón de esa vertida (p. ej. mayor con grafito; respáldalo con una ficha técnica).")));
+
+  const curva = el("select", { id: "curva" }, ...b.curvas.map(c => el("option", { value: c.nombre }, c.etiqueta)));
+  curva.value = b.curva;
+  f.append(grupo("Hidratación", el("div", { className: "par ancho" }, el("label", { htmlFor: "curva" }, "Curva"), curva),
+    el("p", { className: "nota" }, "Las curvas medidas son las 8 del profesor (fuente por edad, sin madurez). Para la decisión con las 8 curvas y 3 climas usa mcplan estudio.")));
+
+  circuitos = [];
+  const lista = el("div", { id: "listaTubos" });
+  const agregar = el("button", { type: "button", id: "agregarTubo" }, "+ Agregar circuito");
+  agregar.addEventListener("click", () => { agregarCircuito(); marcar(); });
+  f.append(grupo("Tubos de enfriamiento", lista, agregar,
+    el("p", { className: "nota" }, "Cada circuito es un serpentín horizontal dentro de una vertida. Altura vacía = media altura. Puedes poner varios en la misma vertida a distintas alturas.")));
 
   if (b.moldaje) {
     const usar = el("input", { type: "checkbox", id: "moldaje_usar", checked: b.moldaje.usar });
@@ -186,13 +204,51 @@ function construir() {
   marcar();
 }
 const valorDe = c => c.type === "checkbox" ? String(c.checked) : c.value;
+let circuitos = [], nCircuito = 0;
+function agregarCircuito() {
+  const d = base.tubos.defecto, n = ++nCircuito, id = k => `t${n}_${k}`;
+  const vertida = el("select", { id: id("vertida") }, ...base.vertidas.map(v => el("option", { value: v.id }, v.nombre)));
+  vertida.value = base.vertidas[Math.min(2, base.vertidas.length - 1)].id;
+  const rango = el("span", { className: "unidad" });
+  const z = campoNumero(id("z"), "", 0, 10, 0.05);
+  z.placeholder = "media";
+  const ponerRango = () => { const v = base.vertidas.find(x => x.id == vertida.value); rango.textContent = ` [${fmt(v.z_min, 2)}–${fmt(v.z_max, 2)} m]`; z.min = v.z_min; z.max = v.z_max; };
+  vertida.addEventListener("change", ponerRango); ponerRango();
+  const material = el("select", { id: id("material") }, ...base.tubos.materiales.map(m => el("option", { value: m }, m.toUpperCase())));
+  material.value = d.material;
+  const direccion = el("select", { id: id("direccion") }, el("option", { value: "x" }, "filas en x"), el("option", { value: "y" }, "filas en y"));
+  const quitar = el("button", { type: "button" }, "Quitar");
+  const caja = el("div", { className: "circuito" },
+    el("div", { className: "par ancho" }, el("label", { htmlFor: id("vertida") }, `Circuito ${n}`), vertida),
+    el("div", { className: "par" }, el("label", { htmlFor: id("z") }, "Altura z", rango), z),
+    el("div", { className: "par ancho" }, el("label", { htmlFor: id("material") }, "Material"), material),
+    el("div", { className: "par ancho" }, el("label", { htmlFor: id("direccion") }, "Dirección"), direccion),
+    par("Separación entre filas", "m", campoNumero(id("separacion"), d.separacion, 0.3, 5, 0.1)),
+    par("Diámetro exterior", "mm", campoNumero(id("diametro"), d.diametro, 10, 100, 1)),
+    par("Caudal", "L/min", campoNumero(id("caudal"), d.caudal, 1, 200, 1)),
+    par("Agua de entrada", "°C", campoNumero(id("T_agua"), d.T_agua, 0, 40, 0.5)),
+    par("Operación", "días", campoNumero(id("dias"), d.dias, 0.5, 30, 0.5)), quitar);
+  const c = { n, caja };
+  quitar.addEventListener("click", () => { circuitos = circuitos.filter(x => x !== c); caja.remove(); marcar(); });
+  circuitos.push(c);
+  $("listaTubos").append(caja);
+}
+function leerCircuitos() {
+  return circuitos.map(({ n }) => {
+    const v = k => $(`t${n}_${k}`).value;
+    return { vertida: v("vertida"), z: v("z"), material: v("material"), direccion: v("direccion"), separacion: v("separacion"),
+             diametro: v("diametro"), caudal: v("caudal"), T_agua: v("T_agua"), dias: v("dias") };
+  });
+}
 const numero = id => $(id) ? $(id).value : undefined;
 
 function leerForm() {
   const b = base, datos = { caso: b.caso, archivos: $("archivos").checked, dx: numero("dx"), duracion_h: numero("duracion_h"), dt_max_s: numero("dt_max_s"),
     k_hormigon: numero("k_hormigon"), k_suelo: numero("k_suelo"), h_superior: numero("h_superior"), h_lateral: numero("h_lateral"),
     absortividad: numero("absortividad"), emisividad: numero("emisividad"), fecha_inicio: numero("fecha_inicio")?.slice(0, 16),
-    vertidas: b.vertidas.map(v => ({ activa: $(`v${v.id}_activa`).checked, inicio_h: numero(`v${v.id}_inicio`), T_colocacion: numero(`v${v.id}_T`) })) };
+    vertidas: b.vertidas.map(v => ({ activa: $(`v${v.id}_activa`).checked, inicio_h: numero(`v${v.id}_inicio`), T_colocacion: numero(`v${v.id}_T`),
+                                     k: numero(`v${v.id}_k`) })),
+    tubos: leerCircuitos(), curva: $("curva").value };
   if (b.moldaje) {
     datos.moldaje = { usar: $("moldaje_usar").checked, retiro_h: numero("moldaje_retiro") };
     datos.aislacion = { capa: $("aislacion_capa").value, caras: $("aislacion_caras").value, retiro_h: numero("aislacion_retiro") };
@@ -200,8 +256,9 @@ function leerForm() {
   return datos;
 }
 function marcar() {
-  let n = 0;
+  let n = circuitos.length;  // cada circuito agregado cuenta como un cambio
   for (const c of $("form").querySelectorAll("input,select")) {
+    if (c.closest(".circuito")) continue;
     const cambio = valorDe(c) !== c.dataset.inicial;
     c.classList.toggle("cambiado", cambio);
     if (cambio) n++;

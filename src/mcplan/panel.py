@@ -51,6 +51,24 @@ class Recolector:
         self.origen = [float(dom.origen[e] + (self.s // 2) * dom.dx) for e in range(3)]  # esquina de la 1.ª muestra
         self.d = dom.dx * self.s
         self.tiempos, self.campos = [], []
+        # Celda de hormigón más caliente y más fría de cada instante, en la malla COMPLETA (no en la muestra)
+        self.hormigon = dom.material == HORMIGON
+        self.vid = dom.vertida_id
+        self.centros = [dom.centros(e) for e in range(3)]
+        self.extremos = []
+
+    def _extremos(self, T, activas):
+        mascara = activas & self.hormigon
+        if not mascara.any():
+            return None
+
+        def celda(plano):
+            ijk = np.unravel_index(int(plano), T.shape)
+            return {"pos": [round(float(self.centros[e][ijk[e]]), 3) for e in range(3)],
+                    "T": round(float(T[ijk]), 2), "v": int(self.vid[ijk])}
+
+        return {"max": celda(np.argmax(np.where(mascara, T, -np.inf))),
+                "min": celda(np.argmin(np.where(mascara, T, np.inf)))}
 
     def __call__(self, t_h, T, activas):
         if not any(abs(t_h - ti) < 1e-6 for ti in self.instantes):
@@ -59,6 +77,7 @@ class Recolector:
         self.tiempos.append(float(t_h))
         self.campos.append(np.where(np.isfinite(muestra), np.round(np.nan_to_num(muestra) * _ESCALA_T),
                                     _SIN_DATO).astype("<i2"))
+        self.extremos.append(self._extremos(T, activas))
 
 
 def _gz64(arreglo) -> str:
@@ -146,7 +165,16 @@ def datos_panel(res, caso, vox, plan, registro, rec, comando) -> dict:
             {"nombre": nombre, "k": m.k, "rho": m.rho, "cp": m.cp, "alpha": m.k / m.capacidad}
             for nombre, m in (("Hormigón", k), ("Suelo", caso.suelo))
         ],
-        "hidratacion": {"Eh_R": h_c.Eh_R, "T_ref": h_c.T_ref_C, "te_quiebre": h_c.te_quiebre_h},
+        "hidratacion": ({"descripcion": f"curva medida {h_c.nombre} (fuente Q(a) por edad, sin madurez): "
+                                        f"{h_c.info['energia_registro_MJ_m3']:.0f} MJ/m³ en el registro"}
+                        if hasattr(h_c, "Q_tabla") else
+                        {"descripcion": f"curva adiabática de Ju y Lei (2019), con E_h/R = {h_c.Eh_R:.0f} K y "
+                                        f"T_ref = {h_c.T_ref_C:.0f} °C; cada celda lleva su propia edad equivalente"}),
+        "tubos_series": {"t": _lista(res.t_h[:len(next(iter(res.tubos.values()))["t_h"])]) if res.tubos else [],
+                         "circuitos": [{"nombre": n, "potencia_kW": _lista(np.asarray(s["potencia_W"]) / 1000),
+                                        "T_salida": _lista(s["T_salida_C"]), "dT_agua": _lista(s["dT_agua_max_C"]),
+                                        "energia_MJ": float(s["energia_J"][-1] / 1e6) if len(s["energia_J"]) else 0.0}
+                                       for n, s in res.tubos.items()]},
         "vertidas": vertidas,
         "etapas": [{"t": t, "activas": a, "dt_critico": c, "dt": dt_de(t),
                     "V": float(np.count_nonzero(np.isin(vox.vertida_id, a))) * dom.dx**3}
@@ -161,9 +189,14 @@ def datos_panel(res, caso, vox, plan, registro, rec, comando) -> dict:
                    "puntos": [{"nombre": n, "pos": list(res.posiciones[n]), "T": _lista(T)}
                               for n, T in res.puntos.items()]},
         "colocaciones": [{"t": t, "v": v} for t, v, *_ in res.eventos],
+        "tubos": [{"nombre": c.nombre, "material": str(c.material), "puntos": np.round(c.puntos, 3).tolist(),
+                   "largo_m": c.largo_m, "caudal_l_min": c.caudal_l_min, "T_agua_C": c.T_agua_C,
+                   "potencia_max_kW": float(np.nanmax(res.tubos[c.nombre]["potencia_W"]) / 1000)
+                   if c.nombre in res.tubos and len(res.tubos[c.nombre]["potencia_W"]) else 0.0}
+                  for c in getattr(caso, "tubos", [])],
         "vista": {"forma": list(rec.forma), "origen": rec.origen, "d": rec.d, "s": rec.s, "tiempos": rec.tiempos,
                   "escala": _ESCALA_T, "sin_dato": _SIN_DATO, "vid": _gz64(rec.vertida_id.astype(np.int8)),
-                  "T": _gz64(np.stack(rec.campos))},
+                  "T": _gz64(np.stack(rec.campos)), "extremos": getattr(rec, "extremos", None)},
     }
 
 

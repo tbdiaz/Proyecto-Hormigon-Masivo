@@ -553,6 +553,34 @@ def cmd_simular3d(args):
         caso.salida = Path(args.salida)
     if args.fecha_inicio:
         caso.fecha_inicio = args.fecha_inicio
+    for clave, valor in _pares(args.k_vertida, "--k-vertida").items():
+        caso.materiales_cfg[int(clave)] = {**caso.materiales_cfg.get(int(clave), {}), "k": valor}
+    claves_tubo = {"vertida", "z", "direccion", "separacion", "material", "diametro", "espesor", "caudal", "T_agua",
+                   "dias", "margen", "nombre"}
+    for n, spec in enumerate(args.tubo or [], start=1):
+        d = dict(p.split("=", 1) for p in spec if "=" in p)
+        if set(d) - claves_tubo or "vertida" not in d:
+            raise ValueError(f"--tubo {' '.join(spec)}: usa claves {', '.join(sorted(claves_tubo))} (vertida es obligatoria)")
+        v = int(d["vertida"])
+        caso.tubos_cfg.append({
+            "nombre": d.get("nombre", f"tubo{n}_V{v}"), "vertida": v, "material": d.get("material", "hdpe"),
+            "serpentin": {"z": float(d["z"]) if "z" in d else None, "separacion": float(d.get("separacion", 1.0)),
+                          "direccion": d.get("direccion", "x"), "margen": float(d.get("margen", 0.5))},
+            "diametro_mm": float(d.get("diametro", 32)), "espesor_mm": float(d.get("espesor", 2)),
+            "caudal_l_min": float(d.get("caudal", 20)), "T_agua_C": float(d.get("T_agua", 15)),
+            "durante_h": float(d.get("dias", 7)) * 24})
+    if args.curva:
+        from .curvas import cargar_fuentes
+
+        fuentes = cargar_fuentes(args.curvas_archivo)
+        if args.curva not in fuentes:
+            raise ValueError(f"Curva {args.curva} no está en {args.curvas_archivo} ({', '.join(fuentes)})")
+        caso.hidratacion = fuentes[args.curva]
+    for v in args.tubos or []:
+        caso.tubos_cfg.append({"nombre": f"tubos_V{v}", "vertida": v, "material": args.tubos_material,
+                               "serpentin": {"separacion": args.tubos_separacion, "margen": 0.5},
+                               "caudal_l_min": args.tubos_caudal, "T_agua_C": args.tubos_T_agua,
+                               "durante_h": args.tubos_dias * 24})
     if args.k_hormigon is not None:
         caso.hormigon.k = args.k_hormigon
     if args.k_suelo is not None:
@@ -634,6 +662,13 @@ def cmd_simular3d(args):
             su = m["suelo"]
             print(f"      suelo (ERA5): T inicial {su['T_capas_C']} °C a {su['profundidades_m']} m; fondo {su['T_fondo_C']} °C")
     print(f"    superficie: {amb.describir()}")
+    for v, m in caso.materiales_vertida().items():
+        print(f"    hormigón de la Vertida_{v:02d}: k = {m.k:g} W/mK, ρ = {m.rho:g} kg/m³, c_p = {m.cp:g} J/kgK")
+    for c in caso.tubos:
+        R_agua, R_pared, Re = c.resistencias()
+        print(f"    tubo {c.nombre}: {c.material} Ø{c.diametro_mm:g} mm, {c.largo_m:.0f} m, {c.caudal_l_min:g} L/min "
+              f"(Re {Re:.0f}), agua a {c.T_agua_C:g} °C, U_L ≈ {float(np.mean(c.U_L(caso.hormigon.k, caso.dx))):.1f} W/mK, "
+              f"{c.durante_h:g} h desde el inicio de la Vertida_{c.vertida or 0:02d}")
     for linea in caso.cubiertas.describir(plan.inicio_h):
         print(f"    {linea}")
     print(f"    {'superficie':<44} {'tipo':<9} {'h [W/m²K]':>17} {'β = h/k [1/m]':>17} {'U [W/m²K]':>17}")
@@ -643,8 +678,11 @@ def cmd_simular3d(args):
         beta = "∞" if f["tipo"] == "Dirichlet" else rango(f["beta"])
         print(f"    {f['superficie']:<44} {f['tipo']:<9} {rango(f['h']):>17} {beta:>17} {rango(f['h_ef']):>17}")
 
-    print(f"\n[5] Simulación 3D: {caso.duracion_h:g} h, dt <= min(0,9 dt_crítico, {caso.dt_max_s:g} s), hidratación Ju y Lei "
-          f"con edad equivalente")
+    hid = caso.hidratacion
+    texto_hid = (f"curva medida {hid.nombre} (fuente por edad, sin madurez)" if hasattr(hid, "Q_tabla")
+                 else "Ju y Lei con edad equivalente")
+    print(f"\n[5] Simulación 3D: {caso.duracion_h:g} h, dt <= min(0,9 dt_crítico, {caso.dt_max_s:g} s), hidratación "
+          f"{texto_hid}")
     recolector = None
     if not args.sin_panel:
         from .panel import Recolector
@@ -664,6 +702,7 @@ def cmd_simular3d(args):
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
         informar=lambda m: print("    " + m), observador=observar, cubiertas=caso.cubiertas,
         profundidad_tmin=caso.profundidad_tmin, superficie_tmin=caso.superficie_tmin,
+        materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos,
     )
     t_calculo = time.perf_counter() - t1
     print(f"    ({t_calculo:.1f} s de cálculo, dt = {res.dts[-1][1]:.0f} s)")
@@ -758,6 +797,23 @@ def cmd_simular3d(args):
         t_vista = sorted({min(res.campos, key=lambda a: abs(a - 12)), float(res.t_h[i])})
         graficar_vista_3d(res, t_vista, salida / "vista_3d.png", dx_vista=args.dx_vista)
         archivos += ["tmax.png", "puntos.png", "cortes_y0.png", "plantas.png", "vista_3d.png"]
+    for nombre, s in res.tubos.items():
+        P = np.nan_to_num(s["potencia_W"])
+        E = float(s["energia_J"][-1]) / 1e6 if len(s["energia_J"]) else 0.0
+        print(f"    tubo {nombre}: potencia máx {P.max() / 1000:.1f} kW, energía extraída {E:.0f} MJ, "
+              f"T salida máx {np.nanmax(s['T_salida_C']) if np.isfinite(s['T_salida_C']).any() else float('nan'):.1f} °C, "
+              f"ΔT hormigón-agua máx {np.nanmax(s['dT_agua_max_C']) if np.isfinite(s['dT_agua_max_C']).any() else float('nan'):.1f} °C")
+        resumen.setdefault("tubos", {})[nombre] = {"potencia_max_kW": float(P.max() / 1000), "energia_MJ": E,
+                                                   "largo_m": s["largo_m"], "U_L_medio_W_mK": s["U_L_medio"]}
+    if res.tubos:
+        resumen["balance_energia"] = res.balance
+        (salida / "resumen.json").write_text(json.dumps(resumen, indent=2, ensure_ascii=False, default=float),
+                                             encoding="utf-8")
+        if not args.sin_figuras:
+            from .graficos import graficar_tubos
+
+            graficar_tubos(res, salida / "tubos.png")
+            archivos.append("tubos.png")
     if args.vtk:
         from .vtk_io import exportar_vtk
 
@@ -1219,6 +1275,18 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--absortividad", type=float, help="absortividad solar del hormigón (modelo físico)")
     s.add_argument("--emisividad", type=float, help="emisividad del hormigón (modelo físico)")
     s.add_argument("--progreso", action="store_true", help="imprime el avance para el editor")
+    s.add_argument("--k-vertida", nargs="+", metavar="V=K", help="k del hormigón de una vertida [W/mK], p. ej. 3=4.0")
+    s.add_argument("--tubos", type=int, nargs="+", metavar="V", help="serpentín de tubos a media altura de estas vertidas")
+    s.add_argument("--tubos-material", default="hdpe", choices=("pvc", "hdpe", "acero", "cobre"))
+    s.add_argument("--tubos-separacion", type=float, default=1.0, help="separación entre filas del serpentín [m]")
+    s.add_argument("--tubos-caudal", type=float, default=20.0, help="caudal de agua por circuito [L/min]")
+    s.add_argument("--tubos-T-agua", dest="tubos_T_agua", type=float, default=15.0, help="temperatura de entrada [°C]")
+    s.add_argument("--tubos-dias", type=float, default=7.0, help="días de operación desde el inicio de la vertida")
+    s.add_argument("--tubo", action="append", nargs="+", metavar="CLAVE=VALOR",
+                   help="un circuito: vertida=3 z=1.65 direccion=x separacion=1 material=cobre diametro=32 caudal=20 "
+                        "T_agua=10 dias=7 (se puede repetir)")
+    s.add_argument("--curva", help="hidratación con una curva medida (p. ej. M4_22A) en vez de la del caso")
+    s.add_argument("--curvas-archivo", default="data/hidratacion/source_terms.txt")
     s.set_defaults(func=cmd_simular3d)
 
     s = sub.add_parser("clima", help="Clima real: snapshots de Open-Meteo (pronóstico y ERA5) y serie para los bordes")

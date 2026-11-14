@@ -78,11 +78,29 @@ def opciones_caso(raiz: Path, nombre: str) -> dict:
         "k_hormigon": caso.hormigon.k, "k_suelo": caso.suelo.k,
         "profundidad_suelo": caso.profundidad_suelo, "margen_suelo": caso.margen_suelo,
         "vertidas": [{"id": i + 1, "nombre": vox.nombres[i], "inicio_h": float(p.get("Inicio_h", 0.0)),
-                      "T_colocacion": float(p.get("TemperaturaColocacion_C", 20.0)), "activa": bool(p.get("activa", True))}
+                      "T_colocacion": float(p.get("TemperaturaColocacion_C", 20.0)), "activa": bool(p.get("activa", True)),
+                      "k": caso.materiales_vertida().get(i + 1, caso.hormigon).k,
+                      "z_min": float(vertidas[i].vertices[:, 2].min()), "z_max": float(vertidas[i].vertices[:, 2].max())}
                      for i, p in enumerate(vox.propiedades)],
+        "tubos": {"defecto": {"material": "hdpe", "separacion": 1.0, "direccion": "x", "diametro": 32.0, "caudal": 20.0,
+                              "T_agua": 15.0, "dias": 7.0},
+                  "materiales": ["hdpe", "pvc", "acero", "cobre"]},
+        "curvas": _curvas_disponibles(raiz, caso), "curva": "ju_lei_2019",
         "moldaje": moldaje, "aislacion": aislacion, "capas": sorted(caso.capas),
         "cobertura": _cobertura(caso) if con_clima else None,
     }
+
+
+def _curvas_disponibles(raiz: Path, caso) -> list[dict]:
+    """Hidratación a elegir: la curva de Ju y Lei del caso o una de las curvas medidas del profesor."""
+    curvas = [{"nombre": "ju_lei_2019", "etiqueta": "Ju y Lei (2019), con madurez · ≈ 60 °C adiabáticos"}]
+    archivo = raiz / "data/hidratacion/source_terms.txt"
+    if archivo.exists():
+        from .curvas import cargar_fuentes, tabla_curvas
+
+        for f in tabla_curvas(cargar_fuentes(archivo), caso.hormigon.capacidad):
+            curvas.append({"nombre": f["curva"], "etiqueta": f"{f['curva']} (medida) · ≈ {f['dTad336_C']:.0f} °C adiabáticos"})
+    return curvas
 
 
 def _cobertura(caso) -> str:
@@ -169,6 +187,46 @@ def construir_argumentos(form: dict, base: dict) -> list[str]:
             args.extend([bandera, *valores])
     if not any(bool(f.get("activa")) for f in form["vertidas"]):
         raise ValueError("Debe quedar al menos una vertida activa")
+
+    conductividades = []
+    for f, b in zip(form["vertidas"], base["vertidas"]):
+        k = _numero(f, "k", 0.5, 20, f"{b['nombre']}: k del hormigón")
+        if _distinto(k, b["k"]):
+            conductividades.append(f"{b['id']}={k:g}")
+    if conductividades:
+        args.extend(["--k-vertida", *conductividades])
+    circuitos = form.get("tubos") or []
+    if not isinstance(circuitos, list) or len(circuitos) > 30:
+        raise ValueError("Tubos: lista de circuitos inválida (máximo 30)")
+    por_id = {b["id"]: b for b in base["vertidas"]}
+    for n, t in enumerate(circuitos, start=1):
+        try:
+            v = int(t.get("vertida"))
+        except (TypeError, ValueError):
+            raise ValueError(f"Tubo {n}: elige la vertida") from None
+        if v not in por_id:
+            raise ValueError(f"Tubo {n}: vertida inexistente")
+        b = por_id[v]
+        if t.get("material") not in base["tubos"]["materiales"]:
+            raise ValueError(f"Tubo {n}: material inválido")
+        if t.get("direccion") not in ("x", "y"):
+            raise ValueError(f"Tubo {n}: dirección inválida")
+        partes = [f"vertida={v}", f"material={t['material']}", f"direccion={t['direccion']}",
+                  f"separacion={_numero(t, 'separacion', 0.3, 5, f'Tubo {n}: separación'):g}",
+                  f"diametro={_numero(t, 'diametro', 10, 100, f'Tubo {n}: diámetro'):g}",
+                  f"caudal={_numero(t, 'caudal', 1, 200, f'Tubo {n}: caudal'):g}",
+                  f"T_agua={_numero(t, 'T_agua', 0, 40, f'Tubo {n}: temperatura del agua'):g}",
+                  f"dias={_numero(t, 'dias', 0.5, 30, f'Tubo {n}: días de operación'):g}"]
+        if t.get("z") not in (None, ""):
+            etiqueta = f"Tubo {n}: altura dentro de {b['nombre']}"
+            z = _numero(t, "z", b["z_min"] + 0.01, b["z_max"] - 0.01, etiqueta)
+            partes.append(f"z={z:g}")
+        args.extend(["--tubo", *partes])
+    curva = form.get("curva", base["curva"])
+    if curva not in {c["nombre"] for c in base["curvas"]}:
+        raise ValueError(f"Curva de hidratación desconocida: {curva}")
+    if curva != base["curva"]:
+        args.extend(["--curva", curva])
 
     if base["moldaje"] is not None:
         m, bm = form.get("moldaje") or {}, base["moldaje"]

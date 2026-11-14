@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .bordes import INF, LAT, SUP, Ambiente, Capa, Cubierta, PlanCubiertas, coeficiente_U
+from .tubos import agua_a_lo_largo
 from .voxelizacion import VACIO, PlanVertidas, Voxelizacion
 
 VACIO_M, SUELO, HORMIGON = 0, 1, 2  # material de cada celda
@@ -197,7 +198,7 @@ class _Etapa:
         return coeficiente_U(h, self.cat_R, dx, self.cat_k), T_eq
 
 
-def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, k_h, k_s) -> _Etapa:
+def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, sumidero=None) -> _Etapa:
     dx = dom.dx
     G = []
     suma = np.zeros(dom.forma)
@@ -215,10 +216,13 @@ def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, k_h, k_s) 
     celda, direccion, orientacion = _caras_expuestas(activas)
     material = dom.material.reshape(-1)[celda]
     combo = tabla[dom.vertida_id.reshape(-1)[celda].astype(np.int64), orientacion]
-    claves, categoria = np.unique(np.stack([orientacion, combo, material], axis=1), axis=0, return_inverse=True)
+    # La conductividad de la celda entra en la categoría: con materiales por vertida no es una sola.
+    k_valores, k_indice = np.unique(k.reshape(-1)[celda], return_inverse=True)
+    claves, categoria = np.unique(np.stack([orientacion, combo, material, k_indice.reshape(-1)], axis=1), axis=0,
+                                  return_inverse=True)
     categoria = categoria.reshape(-1)
     capas = [combos[c] for c in claves[:, 1]]
-    cat_k = np.where(claves[:, 2] == HORMIGON, k_h, k_s).astype(float)
+    cat_k = k_valores[claves[:, 3]].astype(float)
     cat_R = np.array([sum(c.R for c in cs) for cs in capas], dtype=float)
     cat_alfa = np.array([cs[-1].absortividad if cs else amb.absortividad for cs in capas], dtype=float)
     cat_eps = np.array([cs[-1].emisividad if cs else amb.emisividad for cs in capas], dtype=float)
@@ -230,8 +234,10 @@ def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, k_h, k_s) 
     suma.reshape(-1)[superficie] += N @ (U_max / dx)
     fondo = np.flatnonzero((activas & (dom.material == SUELO))[:, :, 0])
     fondo = np.ravel_multi_index(np.unravel_index(fondo, dom.forma[:2]) + (np.zeros_like(fondo),), dom.forma)
-    g_fondo = 2 * k_s / dx**2
+    g_fondo = 2 * float(k.reshape(-1)[fondo[0]]) / dx**2 if len(fondo) else 0.0
     suma.reshape(-1)[fondo] += g_fondo
+    if sumidero is not None:
+        suma += sumidero.reshape(dom.forma)
 
     expuesta = np.zeros(dom.forma, dtype=bool)
     con_h = (N @ (U_max > 0)) > 0
@@ -276,6 +282,7 @@ class Resultado3D:
     Tmin_todas: np.ndarray | None = None  # Tmin contando aristas y vértices (dato complementario)
     Tmin_todas_pos: np.ndarray | None = None
     balance: dict = field(default_factory=dict)  # balance de energía [J] (ver simular_3d)
+    tubos: dict = field(default_factory=dict)  # circuito -> series de potencia extraída, T de salida, ΔT agua-hormigón
 
     @property
     def dT(self) -> np.ndarray:
@@ -309,6 +316,8 @@ def simular_3d(
     profundidad_tmin: float | None = None,
     superficie_tmin: str = "todas",
     activacion: Activacion | None = None,
+    materiales_vertida: dict | None = None,
+    tubos: list | None = None,
 ) -> Resultado3D:
     """Integra la fundación por etapas: entre eventos (colocación o retiro de una capa) la geometría no cambia.
 
@@ -320,6 +329,8 @@ def simular_3d(
     representativos de una superficie); "todas" incluye aristas y vértices. Tmin_todas siempre se registra.
     observador(t_h, T, activas), si se indica, se llama en cada instante guardado (ver panel.Recolector).
     activacion: hora y temperatura de colocación de cada celda (por defecto, la de `plan`).
+    materiales_vertida: {vertida: Material} para hormigones distintos por vertida (p. ej. más conductivo).
+    tubos: circuitos de enfriamiento (tubos.Circuito con su recorrido en celdas).
 
     Balance de energía (res.balance): E_final - E_inicial = colocación + hidratación + bordes + fondo,
     con E = suma de C T V sobre las celdas que existen. Euler explícito lo cumple a precisión de máquina;
@@ -332,6 +343,11 @@ def simular_3d(
     es_s = dom.material == SUELO
     k = np.where(es_h, hormigon.k, np.where(es_s, suelo.k, 1.0))
     C = np.where(es_h, hormigon.capacidad, np.where(es_s, suelo.capacidad, 1.0))
+    for v, m in (materiales_vertida or {}).items():
+        celdas_v = es_h & (dom.vertida_id == int(v))
+        k = np.where(celdas_v, m.k, k)
+        C = np.where(celdas_v, m.capacidad, C)
+    Cv, kv = C.reshape(-1), k.reshape(-1)
     zc = dom.centros(2)
     perfil = T_suelo_inicial(zc) if callable(T_suelo_inicial) else np.full(zc.shape, float(T_suelo_inicial))
     T = np.where(es_s, np.broadcast_to(perfil, forma), np.nan)
@@ -344,7 +360,6 @@ def simular_3d(
     vox_id = dom.vertida_id
     activas = es_s.copy()
     ids_h = np.flatnonzero(es_h)  # sólo estas celdas hidratan: se trabaja sobre ellas
-    rho_cp = hormigon.capacidad
 
     puntos = puntos or {}
     idx_puntos = {n: dom.indice(*p) for n, p in puntos.items()}
@@ -383,7 +398,7 @@ def simular_3d(
         Tc = T.reshape(-1)[celda]
         # Perfil lineal en la media celda: flujo q = U (T_eq - Tc) entra por la cara; a la profundidad p:
         # T(p) = Tc + q (dx/2 - p) / k.  (p = 0 es la superficie del hormigón, bajo el moldaje si lo hay.)
-        T25 = Tc + U[cat] * (T_eq[cat] - Tc) * (dx / 2 - profundidad_tmin) / hormigon.k
+        T25 = Tc + U[cat] * (T_eq[cat] - Tc) * (dx / 2 - profundidad_tmin) / etapa.cat_k[cat]
 
         def en(f):
             return float(T25[f]), (posicion(celda[f]) + _NORMALES[direccion[f]] * (dx / 2 - profundidad_tmin)).tolist()
@@ -412,6 +427,12 @@ def simular_3d(
         reg["Tmedv"].append([float(T[m & activas].mean()) if (m & activas).any() else np.nan for m in mascaras_v])
         reg["t"].append(t_h)
         reg["amb"].append(ambiente.temperatura(t_h * 3600))
+        for c in circuitos:
+            s = estado_tubos[c["nombre"]]
+            serie = series_tubos[c["nombre"]]
+            serie["t_h"].append(t_h)
+            for clave in ("potencia_W", "T_salida_C", "dT_agua_max_C", "energia_J"):
+                serie[clave].append(s[clave])
         reg["corte"].append(np.where(activas[:, j0, :], T[:, j0, :], np.nan).astype(np.float32))
         for n, i in idx_puntos.items():
             reg_p[n].append(float(T[i]) if activas[i] else np.nan)
@@ -433,9 +454,26 @@ def simular_3d(
     colocaciones = {float(t) for t in np.unique(t_act[np.isfinite(t_act)]) if 0 <= t <= duracion_h}
     retiros_plan = [(t, d) for t, d in cubiertas.eventos(act.inicio_h, act.fin_h) if 0 <= t <= duracion_h]
     V = dx**3
-    bal = {"hidratacion": 0.0, "bordes": 0.0, "fondo": 0.0, "colocacion": 0.0}
+    bal = {"hidratacion": 0.0, "bordes": 0.0, "fondo": 0.0, "colocacion": 0.0, "tubos": 0.0}
+    # Tubos: ventana de operación absoluta (desde el inicio de su vertida) y U_L de cada tramo.
+    circuitos = []
+    for c in tubos or []:
+        t_on = c.desde_h + (float(act.inicio_h[c.vertida - 1]) if c.vertida else 0.0)
+        if not np.isfinite(t_on):
+            continue
+        circuitos.append({"nombre": c.nombre, "circuito": c, "t_on": t_on, "t_off": t_on + c.durante_h,
+                          "celdas": c.celdas, "UL_L": c.U_L(kv[c.celdas], dx) * c.largos, "m_c": c.m_c,
+                          "T_in": c.T_agua_C})
+    estado_tubos = {c["nombre"]: {"potencia_W": 0.0, "T_salida_C": np.nan, "dT_agua_max_C": np.nan, "energia_J": 0.0}
+                    for c in circuitos}
+    series_tubos = {c["nombre"]: {"t_h": [], "potencia_W": [], "T_salida_C": [], "dT_agua_max_C": [], "energia_J": []}
+                    for c in circuitos}
+
+    def tubos_activos(t_h):
+        return [c for c in circuitos if c["t_on"] - 1e-9 <= t_h < c["t_off"] - 1e-9]
     E_inicial = float(np.sum(np.where(activas, C * np.nan_to_num(T), 0.0))) * V
-    hitos = sorted(set(guardados) | colocaciones | {t for t, _ in retiros_plan})
+    hitos = sorted(set(guardados) | colocaciones | {t for t, _ in retiros_plan}
+                   | {t for c in circuitos for t in (c["t_on"], c["t_off"]) if 0 <= t <= duracion_h})
 
     etapa = None
     tabla_actual = None
@@ -460,6 +498,11 @@ def simular_3d(
             var = var_v.reshape(forma)
             sup, fondo = etapa.superficie, etapa.fondo
             ids = ids_h[activas.reshape(-1)[ids_h]]  # hormigón que existe
+            enfriando = []
+            for c in tubos_activos(t0):
+                existe = activas.reshape(-1)[c["celdas"]]
+                a = np.where(existe, np.exp(-c["UL_L"] / c["m_c"]), 1.0)
+                enfriando.append((c, a, existe))
             difs = [np.empty([n - (e == eje) for e, n in enumerate(forma)]) for eje in range(3)]
             cortes = []
             for eje in range(3):
@@ -488,11 +531,23 @@ def simular_3d(
                 Th, eh = Tv[ids], Ev[ids]
                 f = hidratacion.factor_arrhenius(Th)
                 if hasattr(hidratacion, "dtheta_dte"):  # Ju y Lei: Q = rho cp dtheta/dte dte/dt (sin repetir Arrhenius)
-                    q = rho_cp * hidratacion.dtheta_dte(eh) * f / 3600.0
+                    q = Cv[ids] * hidratacion.dtheta_dte(eh) * f / 3600.0
                 else:
                     q = hidratacion.potencia(eh, Th, hormigon.rho, hormigon.cp)
                 var_v[ids] += q
                 bal["hidratacion"] += float(np.sum(q)) * V * dt
+                # Tubos: el agua se calienta celda a celda; cada celda pierde lo que gana el agua.
+                for c, a, existe in enfriando:
+                    Tc = Tv[c["celdas"]]
+                    Tw = agua_a_lo_largo(a, Tc, c["T_in"])
+                    T_antes = np.concatenate([[c["T_in"]], Tw[:-1]])
+                    qc = c["m_c"] * (Tw - T_antes)  # W que entrega cada tramo
+                    np.add.at(var_v, c["celdas"], -qc / V)
+                    bal["tubos"] -= float(qc.sum()) * dt
+                    e = estado_tubos[c["nombre"]]
+                    e["potencia_W"], e["T_salida_C"] = float(qc.sum()), float(Tw[-1])
+                    e["energia_J"] += float(qc.sum()) * dt
+                    e["dT_agua_max_C"] = float(np.max((Tc - T_antes)[existe])) if existe.any() else np.nan
                 Ev[ids] = eh + dt / 3600.0 * f
                 var *= dt_C
                 T += var
@@ -516,9 +571,20 @@ def simular_3d(
                 if informar:
                     informar(f"t = {t_h:6.1f} h: {d}")
         tabla, combos = cubiertas.tabla(t_h, act.inicio_h, nv, act.fin_h)
-        firma = (tabla.tobytes(), tuple(tuple(c.nombre for c in cs) for cs in combos))
+        activos = tubos_activos(t_h)
+        for c in circuitos:
+            if c not in activos:
+                estado_tubos[c["nombre"]].update(potencia_W=0.0, T_salida_C=np.nan, dT_agua_max_C=np.nan)
+        firma = (tabla.tobytes(), tuple(tuple(c.nombre for c in cs) for cs in combos),
+                 tuple(c["nombre"] for c in activos))
         if nuevas or etapa is None or firma != tabla_actual:
-            etapa = _etapa(dom, activas, k, C, ambiente, tabla, combos, hormigon.k, suelo.k)
+            sumidero = None
+            if activos:  # cota del intercambio celda-agua para el paso crítico: U_L L / V por celda
+                sumidero = np.zeros(activas.size)
+                for c in activos:
+                    existe = activas.reshape(-1)[c["celdas"]]
+                    np.add.at(sumidero, c["celdas"][existe], c["UL_L"][existe] / V)
+            etapa = _etapa(dom, activas, k, C, ambiente, tabla, combos, sumidero)
             tabla_actual = firma
             etapas.append((t_h, act.vertidas_activas(t_h), float(etapa.dt_critico)))
             if informar and (any(e[0] == t_h for e in eventos) or n_hito == 0):
@@ -543,6 +609,11 @@ def simular_3d(
         retiros=retiros, Tmin_pos=np.array(reg["pos_min"]), profundidad_tmin=profundidad_tmin,
         superficie_tmin=superficie_tmin if profundidad_tmin is not None else "todas",
         Tmin_todas=np.array(reg["Tmin_t"]), Tmin_todas_pos=np.array(reg["pos_min_t"]), balance=bal,
+        tubos={n: {**{k_: np.array(v) for k_, v in s.items()},
+                   "largo_m": next(c["circuito"].largo_m for c in circuitos if c["nombre"] == n),
+                   "U_L_medio": float(np.mean(next(c["UL_L"] / c["circuito"].largos for c in circuitos
+                                                    if c["nombre"] == n)))}
+               for n, s in series_tubos.items()},
     )
 
 
@@ -584,6 +655,18 @@ class Caso3D:
     suelo_cfg: dict = field(default_factory=dict)
     cubiertas: PlanCubiertas | None = None  # se arma en preparar() (necesita el pset del IFC)
     clima_info: dict = field(default_factory=dict)
+    materiales_cfg: dict = field(default_factory=dict)  # materiales.por_vertida: {vertida: {k, rho, cp}}
+    tubos_cfg: list = field(default_factory=list)  # sección `tubos` del YAML
+    tubos: list = field(default_factory=list)  # circuitos ya recorridos en celdas (preparar)
+
+    def materiales_vertida(self) -> dict:
+        """{vertida: Material}: el hormigón base con lo que cambie cada vertida (p. ej. k mayor con grafito)."""
+        salida = {}
+        for clave, d in self.materiales_cfg.items():
+            v = int(str(clave).replace("Vertida_", ""))
+            salida[v] = Material(float(d.get("k", self.hormigon.k)), float(d.get("rho", self.hormigon.rho)),
+                                 float(d.get("cp", self.hormigon.cp)))
+        return salida
 
 
 def _texto_T_amb(d) -> str:
@@ -675,6 +758,8 @@ def cargar_caso_3d(ruta) -> Caso3D:
         fecha_inicio=None if fecha is None else str(fecha), clima_cfg=clima_cfg, superficie_cfg=superficie,
         capas=capas, cubiertas_cfg={t: cfg[t] for t in ("moldaje", "aislacion") if cfg.get(t)},
         suelo_cfg=dict(suelo),
+        materiales_cfg=dict(mats["hormigon"].get("por_vertida") or {}),
+        tubos_cfg=list(cfg.get("tubos") or []),
     )
 
 
@@ -690,6 +775,9 @@ def preparar(caso: Caso3D, vertidas_ifc=None):
     registro = aplicar_cambios(vox, caso.cambios)
     dom = construir_dominio(vox, caso.profundidad_suelo, caso.margen_suelo)
     caso.cubiertas = armar_cubiertas(caso, vox)
+    from .tubos import circuito_desde_dict
+
+    caso.tubos = [circuito_desde_dict(dom, d, f"tubo{n + 1}") for n, d in enumerate(caso.tubos_cfg)]
     if caso.clima_cfg is not None:
         preparar_clima(caso)
     return vox, dom, PlanVertidas(vox), registro
@@ -761,6 +849,6 @@ def simular_caso_3d(caso: Caso3D, vertidas_ifc=None, informar=None):
         T_suelo_inicial=caso.T_suelo_inicial, guardar_cada_h=caso.guardar_cada_h, dt_max_s=caso.dt_max_s,
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
         informar=informar, cubiertas=caso.cubiertas, profundidad_tmin=caso.profundidad_tmin,
-        superficie_tmin=caso.superficie_tmin,
+        superficie_tmin=caso.superficie_tmin, materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos,
     )
     return res, registro

@@ -14,14 +14,16 @@ COLORES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6
 
 
 def fig_curvas(fuentes, rho_cp, ruta):
-    """Las 8 fuentes Q(a) y su energía acumulada como aumento adiabático equivalente E/(ρ c_p)."""
+    """Las fuentes Q(a) y su energía acumulada como aumento adiabático equivalente E/(ρ c_p)."""
     from .hidratacion import HidratacionJuLei2019
 
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(13, 4.8))
     probetas = sorted({f.info["probeta"] for f in fuentes.values()})
+    campanas = sorted({f.info["campana"] for f in fuentes.values()})
+    estilos = ("-", "--", "-.")
     for n, f in fuentes.items():
         color = COLORES[probetas.index(f.info["probeta"]) % 8]
-        ls = "-" if f.info["campana"] == "SS" else "--"
+        ls = estilos[campanas.index(f.info["campana"]) % len(estilos)]
         a = f.edad_h
         m = a <= 336
         a1.plot(a[m], f.Q_tabla[m], ls, color=color, lw=1.4, label=n)
@@ -34,7 +36,9 @@ def fig_curvas(fuentes, rho_cp, ruta):
     a2.plot(a, jl.theta(a), color="0.3", lw=2, alpha=0.6, label="Ju y Lei (2019)")
     a1.set_xlabel("edad a [h]")
     a1.set_ylabel("Q [W/m³]")
-    a1.set_title("Fuente de calor de cada curva (línea: SS; trazos: 22A; punteado: fin del registro)", fontsize=9.5)
+    leyenda = "; ".join(f"{('línea', 'trazos', 'trazo y punto')[i % 3]}: {c}" for i, c in enumerate(campanas) if c)
+    a1.set_title("Fuente de calor de cada curva (" + (leyenda + "; " if len(campanas) > 1 else "")
+                 + "punteado: fin del registro)", fontsize=9.5)
     a1.legend(fontsize=7.5, ncol=2)
     a2.set_xlabel("edad a [h]")
     a2.set_ylabel("E(a) / (ρ c_p) [°C]")
@@ -79,15 +83,24 @@ def fig_clima(todas, elegidas, ruta, dias=14):
 
 
 def fig_D_Pf(resumen, ruta, dec=None):
-    fig, ax = plt.subplots(figsize=(8, 5))
+    fig, ax = plt.subplots(figsize=(9, 5.5))
+    # Planes en el mismo punto (misma D y P_f, p. ej. la vertida única con distintas protecciones): una sola
+    # etiqueta con todos los nombres, uno por línea, para que no se monten.
+    grupos = {}
     for r in resumen:
-        color = "#1b7f4b" if r["cumple"] else "#b3261e"
-        ax.plot(r["D_h"], 100 * r["P_f"], "o", ms=8, color=color, mfc=color if r["cumple"] else "white")
-        ax.annotate(r["plan"], (r["D_h"], 100 * r["P_f"]), xytext=(5, 5), textcoords="offset points", fontsize=8)
+        grupos.setdefault((round(r["D_h"], 6), round(r["P_f"], 6)), []).append(r)
+    for (D, P), rs in grupos.items():
+        cumple = rs[0]["cumple"]
+        color = "#1b7f4b" if cumple else "#b3261e"
+        ax.plot(D, 100 * P, "o", ms=8, color=color, mfc=color if cumple else "white")
+        nombres = [("★ " if dec and r["plan"] == dec.get("propuesto") else "") + r["plan"] for r in rs]
+        ax.annotate("\n".join(nombres), (D, 100 * P), xytext=(7, 0), textcoords="offset points", fontsize=7.5,
+                    va="center")
     ax.axhline(5, color="0.3", ls="--", lw=1, label="P_f = 5 %")
     ax.set_xlabel("D: duración de la colocación [h desde t0]")
     ax.set_ylabel("P_f conjunta [%]")
-    ax.set_ylim(-3, 103)
+    n_cero = max((len(rs) for (D, P), rs in grupos.items() if P == 0), default=1)
+    ax.set_ylim(-3 - 2.2 * max(n_cero - 2, 0), 103)  # espacio para la lista de planes con P_f = 0
     titulo = "Duración vs. probabilidad de falla conjunta (lleno: cumple)"
     if dec and dec.get("propuesto"):
         titulo += f" · propuesto: {dec['propuesto']}"

@@ -1,15 +1,14 @@
 """Curvas de hidratación del curso: fuente volumétrica Q(t) medida en probetas (E13/F02).
 
-El archivo data/hidratacion/source_terms.txt (entregado por el profesor) trae 8 curvas
-Q(t) [W/m³] de cilindros de hormigón (r = 3,75 cm, h = 15 cm): probetas M1-M4 en dos
-campañas, SS (13-20 abr 2025, 240,5 h) y 22A (22 abr 2025, 163,1 h). Fueron recuperadas
-con una PINN a la conductancia β de menor RMSE de cada probeta. Ya son fuente de calor:
-no hay que derivar una curva adiabática ni hacer el balance del ensayo.
+El archivo data/hidratacion/source_terms.txt (entregado por el profesor) trae curvas Q(t) [W/m³]
+que ya son fuente de calor: no hay que derivar una curva adiabática ni hacer el balance del
+ensayo. Cada nombre es PROBETA_CAMPAÑA (p. ej. M1_SS). Las primeras curvas (M1-M4, campañas SS
+y 22A) se retiraron el 14 nov 2026 porque estaban malas; ver data/hidratacion/LEEME.md.
 
 Cómo se usan como fuente por edad, q_h(a) [W/m³], con a = t - t_activación:
-- **Inicio:** el tiempo 0 del archivo es "inicio del registro + 2 h", así que
-  a = t_archivo + 2 h. En 0 <= a < 2 h no hay datos: rampa lineal de 0 a Q(2 h)
-  (energía < 1 MJ/m³, declarada).
+- **Inicio:** el tiempo 0 del archivo puede ser posterior al inicio del registro (`desfase_h`,
+  2 h en las curvas anteriores), así que a = t_archivo + desfase. En 0 <= a < desfase no hay
+  datos: rampa lineal de 0 a Q(desfase) (energía pequeña, declarada).
 - **Suavizado:** promedio por bloques de `paso_h` (10 min). Conserva la energía del
   tramo y quita el ruido de muestreo de 60 s (σ ≈ 0,1-0,3 W/m³).
 - **Cola:** después del registro, decaimiento exponencial desde el último valor con τ
@@ -34,17 +33,23 @@ ARCHIVO = Path("data/hidratacion/source_terms.txt")
 def leer_source_terms(ruta=ARCHIVO) -> dict:
     """Curvas crudas: nombre -> {t_h, Q, beta, probeta, campaña}. Verifica el formato del encabezado."""
     ruta = Path(ruta)
+    if not ruta.exists():
+        raise FileNotFoundError(f"No está {ruta}: copia ahí el archivo de curvas del profesor "
+                                "(ver data/hidratacion/LEEME.md)")
     texto = ruta.read_text(encoding="utf-8")
     if "W/m^3" not in texto or "time_h" not in texto:
         raise ValueError(f"{ruta}: no tiene el formato esperado (columnas time_h y Q en W/m^3)")
-    betas = dict(re.findall(r"#\s+\d+\s+(\w+)_W_m3 \[W/m\^3\]\s+beta = ([\d.]+)", texto))
+    betas = dict(re.findall(r"#\s+\d+\s+(\w+)_W_m3 \[W/m\^3\]\s+beta = ([\d.]+)", texto))  # β por curva
+    comun = re.search(r"beta = ([\d.]+) W/\(m\^2 K\) on all faces", texto)  # o un β común a todas
+    if comun and not betas:
+        betas = {n: comun.group(1) for n in re.findall(r"#\s+(\w+_\w+)\s+[\d.]+ /", texto)}
     encabezado = next(l for l in texto.splitlines() if l.startswith("# time_h"))
     nombres = encabezado.lstrip("#").split()[1:]
     datos = np.loadtxt(ruta, comments="#")
     curvas = {}
     for i, n in enumerate(nombres, start=1):
         ok = np.isfinite(datos[:, i])
-        probeta, campana = n.split("_")
+        probeta, _, campana = n.partition("_")  # PROBETA_CAMPAÑA; sin "_", campaña vacía
         curvas[n] = {"t_h": datos[ok, 0], "Q": datos[ok, i], "beta": float(betas.get(n, "nan")),
                      "probeta": probeta, "campana": campana}
     return curvas

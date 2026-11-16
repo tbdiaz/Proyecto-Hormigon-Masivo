@@ -24,7 +24,7 @@ recursos:
 T_colocacion: 18           # °C, igual en todas las etapas (guía del curso); los planes pueden cambiarla
 
 curvas:
-  archivo: ../data/hidratacion/source_terms.txt   # 8 curvas Q(t) [W/m³] entregadas por el profesor
+  archivo: ../data/hidratacion/source_terms.txt   # 8 curvas Q(t) [W/m³] del profesor, versión corregida del 14 nov 2026
   usar: todas
   pesos: iguales           # [HIPÓTESIS] 8 probetas de la misma mezcla (M1-M4 × 2 campañas), equiprobables
   desfase_h: 2.0           # t = 0 del archivo = inicio del registro + 2 h
@@ -39,10 +39,118 @@ clima:
   transicion_h: 24
   ventana_dias: 3
 
-# Familia de planes: la partición y los recursos están fijos dentro de cada familia, y se
-# recorren las esperas entre etapas. Con una sola bomba, todo plan sin esperas dura lo mismo
-# (V/r ≈ 23,6 h) y es físicamente igual a la vertida única (colocación continua por capas).
+# Familia de planes (14 nov 2026, curvas corregidas). Con estas curvas Tmax cumple sin protección y el
+# problema es el ΔT, así que la familia recorre niveles de protección de la vertida única (la más rápida
+# posible con una bomba: D = V/r ≈ 23,6 h; todo plan sin esperas es físicamente igual) y, como variante más
+# lenta, las 5 vertidas del IFC con esperas y la protección más completa. Recursos comunes: una bomba a 27 m³/h.
+#
+# Protecciones de cada plan:
+#   M5 / M10: manta de 5 / 10 cm en todas las caras expuestas, más el moldaje, hasta después del horizonte de
+#             evaluación (retiro a las 600 h). El retiro se planifica aparte: ver docs/decision.md.
+#   T10:      colocación a 10 °C (hormigón preenfriado); sin esa marca, 18 °C.
+#   A25:      un serpentín HDPE a media altura de cada vertida (filas cada 1 m, 20 L/min), agua a 25 °C, 14 días.
+#             Con agua a 20 °C el ΔT empeora: enfría de más el hormigón junto a los bordes.
 planes:
+  - nombre: unica
+    descripcion: vertida única sin protección (moldaje 72 h)
+    etapas: [[1, 2, 3, 4, 5]]
+  - nombre: unica-M10
+    descripcion: vertida única con manta de 10 cm en todas las caras
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: &m10
+      moldaje: {retiro_h: 600}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 600}
+  - nombre: unica-M10-T10
+    descripcion: vertida única con manta de 10 cm y colocación a 10 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+  - nombre: unica-M10-A25
+    descripcion: vertida única con manta de 10 cm y tubos con agua a 25 °C (colocación a 18 °C)
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: &a25
+      - {nombre: tubos_V1, vertida: 1, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V2, vertida: 2, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+  - nombre: unica-M5-T10-A25
+    descripcion: vertida única con manta de 5 cm, colocación a 10 °C y tubos con agua a 25 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 600}
+      aislacion: {capa: manta_5cm, caras: todas, retiro_h: 600}
+    tubos: *a25
+  - nombre: unica-M10-T10-A25
+    descripcion: vertida única con manta de 10 cm, colocación a 10 °C y tubos con agua a 25 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *a25
+  - familia: 5V-M10-T10-A25
+    descripcion: 5 vertidas del IFC con manta de 10 cm, colocación a 10 °C y tubos con agua a 25 °C
+    T_colocacion: 10
+    etapas: [[1], [2], [3], [4], [5]]
+    esperas_h: [12, 24]
+    cubiertas: *m10
+    tubos: *a25
+  # Más margen (agregados después de la confirmación con malla fina: unica-M10-T10-A25 llega a M_Δ = 19,8 °C con
+  # dx = 0,275 m y a 20,6 °C con 0,11 m en su peor escenario). T8 = colocación a 8 °C; S75 = tubos cada 0,75 m.
+  - nombre: unica-M10-T8-A25
+    descripcion: vertida única con manta de 10 cm, colocación a 8 °C y tubos con agua a 25 °C
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *a25
+  - nombre: unica-M10-T10-A25-S75
+    descripcion: vertida única con manta de 10 cm, colocación a 10 °C y tubos cada 0,75 m con agua a 25 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: &a25s75
+      - {nombre: tubos_V1, vertida: 1, material: hdpe, serpentin: {separacion: 0.75}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V2, vertida: 2, material: hdpe, serpentin: {separacion: 0.75}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 0.75}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 0.75}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 0.75}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+  - nombre: unica-M10-T8-A25-S75
+    descripcion: vertida única con manta de 10 cm, colocación a 8 °C y tubos cada 0,75 m con agua a 25 °C
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *a25s75
+  # Tubos sólo en el núcleo (V3, V4, V5): el punto frío está en el anillo exterior de la losa (V1+V2, 1,1 m de
+  # espesor), y los serpentines de V1 y V2 pasan bajo ese anillo y lo enfrían. N = tubos sólo en el núcleo.
+  - nombre: unica-M10-T10-N25
+    descripcion: vertida única con manta de 10 cm, colocación a 10 °C y tubos sólo en V3-V5 con agua a 25 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: &n25
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+  - nombre: unica-M10-T10-N20
+    descripcion: vertida única con manta de 10 cm, colocación a 10 °C y tubos sólo en V3-V5 con agua a 20 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: &n20
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 20, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 20, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 20, durante_h: 336}
+  - nombre: unica-M10-T8-N20
+    descripcion: vertida única con manta de 10 cm, colocación a 8 °C y tubos sólo en V3-V5 con agua a 20 °C
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *n20
+
+# Familia anterior (curvas retiradas): vertida única, 5V con esperas de 12-72 h, 8C con 24-48 h, protecciones a
+# 10 °C con manta de 5 cm, y tubos HDPE/cobre con agua a 10 °C. Queda en el historial de git (commit f15175f).
+planes_anteriores:
   - nombre: unica
     descripcion: vertida única, colocación continua de todo el volumen
     etapas: [[1, 2, 3, 4, 5]]
@@ -88,7 +196,9 @@ planes:
       moldaje: {retiro_h: 400}
       aislacion: {capa: manta_5cm, caras: todas, retiro_h: 400}
   # Con tubos de enfriamiento: un serpentín a media altura de cada vertida (filas cada 1 m), agua a 10 °C
-  # durante 14 días desde el inicio de cada vertida. "TG": además hormigón con grafito (k = 4 W/mK) [SUPUESTO].
+  # durante 14 días desde el inicio de cada vertida. "TG": además hormigón con grafito (k = 4 W/mK). Chen et al.
+  # (2024) midieron 4,11 W/mK con árido recubierto de grafito, 1,9 veces el mismo hormigón sin grafito; aplicado a
+  # nuestro k base da ≈ 4,2, así que 4,0 queda del lado conservador. Reparos en docs/tubos.md, sección 3.
   - nombre: unica-T
     descripcion: vertida única con tubos HDPE en las 5 vertidas, agua a 10 °C
     etapas: [[1, 2, 3, 4, 5]]

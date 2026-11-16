@@ -89,12 +89,15 @@ def _lista(a):
     return [None if not np.isfinite(x) else round(float(x), 3) for x in np.asarray(a, dtype=float)]
 
 
-def _areas(dom, vox, plan, caso):
+def _areas(dom, vox, plan, caso, relleno_puesto=False):
     """Área [m²] de cada tipo de superficie con todas las vertidas del plan colocadas (sin contar capas)."""
     from .simulacion3d import _caras_expuestas
     from .bordes import LAT, SUP
 
-    final = (dom.material == SUELO) | np.isin(dom.vertida_id, plan.vertidas_activas(caso.duracion_h))
+    suelo = dom.material == SUELO
+    if dom.relleno is not None and not relleno_puesto:
+        suelo &= ~dom.relleno
+    final = suelo | np.isin(dom.vertida_id, plan.vertidas_activas(caso.duracion_h))
     celda, _, orientacion = _caras_expuestas(final)
     mat = dom.material.reshape(-1)[celda]
     vid = dom.vertida_id.reshape(-1)[celda]
@@ -156,7 +159,12 @@ def datos_panel(res, caso, vox, plan, registro, rec, comando) -> dict:
         "tiempo": {"duracion_h": caso.duracion_h, "hora_inicio": caso.hora_inicio, "dt": res.dts[-1][1],
                    "dt_max": caso.dt_max_s, "seguridad": caso.factor_seguridad, "guardar_cada_h": caso.guardar_cada_h},
         "bordes": _limpio(filas_bordes(caso.ambiente, caso.cubiertas, dom.dx, caso.hormigon.k, caso.suelo.k,
-                                       _areas(dom, vox, plan, caso))),
+                                       _areas(dom, vox, plan, caso, bool(res.relleno and res.relleno["colocado"])),
+                                       excavacion=dom.excavacion, cota=dom.cota_terreno)),
+        "excavacion": ({"descripcion": dom.excavacion.describir(dom.cota_terreno), "cota_m": dom.cota_terreno,
+                        "sobreancho_m": dom.excavacion.sobreancho_m, "fisico": caso.ambiente.modelo == "fisico"}
+                       if dom.excavacion is not None else None),
+        "relleno": _limpio({**res.relleno, "k_efectivo": res.relleno["k"] or caso.suelo.k}) if res.relleno else None,
         "ambiente": {"descripcion": caso.ambiente.describir(), "T_amb": caso.T_amb_texto,
                      "cubiertas": caso.cubiertas.describir(plan.inicio_h), "clima": _limpio(caso.clima_info or None),
                      "fecha_inicio": caso.fecha_inicio, "criterio_Tmin": res.criterio_Tmin},

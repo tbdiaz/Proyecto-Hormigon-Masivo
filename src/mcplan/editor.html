@@ -161,12 +161,12 @@ function construir() {
     return el("tr", {}, el("td", {}, el("label", { className: "check" }, activa, v.nombre.replace("Vertida_0", "V"))), el("td", {}, inicio), el("td", {}, T), el("td", {}, kv));
   });
   f.append(grupo("Vertidas", el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Construir"), el("th", {}, "Inicio [h]"), el("th", {}, "T col. [°C]"), el("th", {}, "k [W/mK]"))), el("tbody", {}, ...filas)),
-    el("p", { className: "nota" }, "k: conductividad del hormigón de esa vertida (p. ej. mayor con grafito; respáldalo con una ficha técnica).")));
+    el("p", { className: "nota" }, "k: conductividad del hormigón de esa vertida. Con árido recubierto de grafito, Chen et al. (2024) midieron 4,11 W/mK, 1,9 veces el mismo hormigón sin grafito.")));
 
   const curva = el("select", { id: "curva" }, ...b.curvas.map(c => el("option", { value: c.nombre }, c.etiqueta)));
   curva.value = b.curva;
   f.append(grupo("Hidratación", el("div", { className: "par ancho" }, el("label", { htmlFor: "curva" }, "Curva"), curva),
-    el("p", { className: "nota" }, "Las curvas medidas son las 8 del profesor (fuente por edad, sin madurez). Para la decisión con las 8 curvas y 3 climas usa mcplan estudio.")));
+    el("p", { className: "nota" }, "Las curvas medidas del profesor aparecen aquí cuando están en data/hidratacion/source_terms.txt (fuente por edad, sin madurez). Para la decisión con todas las curvas y 3 climas usa mcplan estudio.")));
 
   circuitos = [];
   const lista = el("div", { id: "listaTubos" });
@@ -193,6 +193,49 @@ function construir() {
       el("div", { className: "par ancho" }, el("label", { htmlFor: "aislacion_capa" }, "Aislación"), capa),
       el("div", { className: "par ancho" }, el("label", { htmlFor: "aislacion_caras" }, "Caras"), caras),
       par("Retiro aislación", "h", retiroA)));
+  }
+  if (b.excavacion) {
+    const E = b.excavacion;
+    const usar = el("input", { type: "checkbox", id: "excavacion_usar", checked: E.usar });
+    const sugerida = b.vertidas.length > 1 ? b.vertidas[b.vertidas.length - 2].z_max : E.tope_m;
+    const prof = campoNumero("excavacion_profundidad", E.profundidad ?? Math.round(sugerida * 100) / 100, 0, E.tope_m + 3, 0.05);
+    const sobre = campoNumero("excavacion_sobreancho", E.sobreancho, 0.3, 5, 0.1);
+    const abrigo = campoNumero("excavacion_abrigo", E.factor_abrigo, 0, 1, 0.01);
+    const NOMBRES = { "0": "0 · mar o costa expuesta", I: "I · lagos, sin obstáculos", II: "II · campo abierto", III: "III · suburbano o bosque", IV: "IV · urbano" };
+    const categoria = el("select", { id: "excavacion_categoria" }, ...E.categorias.map(c => el("option", { value: c }, NOMBRES[c] || c)));
+    categoria.value = E.categoria;
+    const perfil = el("input", { type: "checkbox", id: "excavacion_perfil", checked: E.perfil_viento });
+    const actualizar = () => { prof.disabled = sobre.disabled = abrigo.disabled = categoria.disabled = perfil.disabled = !usar.checked; };
+    usar.addEventListener("change", actualizar); actualizar();
+    const aviso = b.modelo === "fisico" ? [] : [el("p", { className: "nota" }, "Este caso usa h fijo (modelo combinado): la excavación no cambia el viento ni el cielo, sólo agrega el suelo natural alrededor.")];
+    f.append(grupo("Excavación",
+      el("div", { className: "par ancho" }, el("label", { className: "check" }, usar, "La fundación está en un hoyo"), el("span")),
+      el("div", { className: "par" }, el("label", { htmlFor: "excavacion_profundidad" }, "Terreno natural", el("span", { className: "unidad" }, " [m sobre la base]")), prof),
+      par("Sobreancho del hoyo", "m", sobre), par("Factor de abrigo", "", abrigo),
+      el("div", { className: "par ancho" }, el("label", { htmlFor: "excavacion_categoria" }, "Terreno (EN 1991-1-4)"), categoria),
+      el("div", { className: "par ancho" }, el("label", { className: "check" }, perfil, "Viento a la altura de la obra"), el("span")),
+      el("p", { className: "nota" }, "Bajo el terreno natural, y mientras no haya relleno, las caras reciben menos viento y ven menos cielo. Viento = viento a 10 m × perfil EN 1991-1-4 (0,70 en campo abierto bajo 2 m) × factor de abrigo. El 0,67 lo midieron Nakamura y Oke (1988) en una calle de alto ≈ ancho; en un hoyo más angosto debería ser menor (≈ 0,25 en el fondo de minas a rajo abierto). El cielo visible sale de la geometría del hoyo."),
+      ...aviso));
+  }
+  if (b.relleno) {
+    const R = b.relleno;
+    const usar = el("input", { type: "checkbox", id: "relleno_usar", checked: R.usar });
+    const z = campoNumero("relleno_z", R.z ?? Math.round((R.tope_m + 0.3) * 100) / 100, 0.05, R.tope_m + 3, 0.05);
+    const desde = campoNumero("relleno_desde", R.desde_h, 0, 720, 1);
+    desde.placeholder = "al descubrir";
+    const T = campoNumero("relleno_T", R.T, -5, 45, 0.5);
+    T.placeholder = "aire del día";
+    const k = campoNumero("relleno_k", R.k, 0.1, 10, 0.01);
+    k.placeholder = `${fmt(b.k_suelo, 2)} (suelo)`;
+    const actualizar = () => { z.disabled = desde.disabled = T.disabled = k.disabled = !usar.checked; };
+    usar.addEventListener("change", actualizar); actualizar();
+    const alturas = b.vertidas.map(v => `${v.nombre.replace("Vertida_0", "V")} ${fmt(v.z_min, 2)}–${fmt(v.z_max, 2)}`).join(" · ");
+    f.append(grupo("Enterrar la fundación",
+      el("div", { className: "par ancho" }, el("label", { className: "check" }, usar, "Relleno de tierra alrededor"), el("span")),
+      el("div", { className: "par" }, el("label", { htmlFor: "relleno_z" }, "Altura del relleno", el("span", { className: "unidad" }, " [m sobre el terreno]")), z),
+      par("Colocación", "h", desde), par("T del relleno", "°C", T), par("k del relleno", "W/mK", k),
+      el("p", { className: "nota" }, `El terreno está en z = 0 y la fundación llega a z = ${fmt(R.tope_m, 2)} m; con una altura mayor queda enterrada entera. Alturas de cada vertida [m]: ${alturas}.`),
+      el("p", { className: "nota" }, "Colocación vacía = cuando las vertidas que toca ya están colocadas y sin moldaje ni aislación. Las caras enterradas dejan de recibir viento, sol y cielo, y siguen contando como superficie en el criterio de ΔT.")));
   }
   const superficie = b.modelo === "combinado"
     ? [par("h caras ±z", "W/m²K", campoNumero("h_superior", b.h_superior, 0, 200, 0.1)), par("h caras laterales", "W/m²K", campoNumero("h_lateral", b.h_lateral, 0, 200, 0.1))]
@@ -253,6 +296,11 @@ function leerForm() {
     datos.moldaje = { usar: $("moldaje_usar").checked, retiro_h: numero("moldaje_retiro") };
     datos.aislacion = { capa: $("aislacion_capa").value, caras: $("aislacion_caras").value, retiro_h: numero("aislacion_retiro") };
   }
+  if (b.excavacion) datos.excavacion = { usar: $("excavacion_usar").checked, profundidad: numero("excavacion_profundidad"),
+                                         sobreancho: numero("excavacion_sobreancho"), factor_abrigo: numero("excavacion_abrigo"),
+                                         categoria: $("excavacion_categoria").value, perfil_viento: $("excavacion_perfil").checked };
+  if (b.relleno) datos.relleno = { usar: $("relleno_usar").checked, z: numero("relleno_z"), desde_h: numero("relleno_desde"),
+                                   T: numero("relleno_T"), k: numero("relleno_k") };
   return datos;
 }
 function marcar() {

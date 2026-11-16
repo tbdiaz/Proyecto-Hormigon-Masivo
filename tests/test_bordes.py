@@ -79,6 +79,23 @@ def test_plan_de_moldaje_y_desmolde():
     assert [t for t, _ in plan.eventos(inicio)] == [72.0, 78.0]
 
 
+def test_manta_sobre_el_terreno():
+    """Vertida 0 = el suelo: su capa cubre las caras superiores del terreno desde t = 0 hasta su retiro."""
+    manta = Capa("manta", 0.1, 0.04)
+    plan = PlanCubiertas([Cubierta("moldaje", TERCIADO, (LAT,), (1,), {1: 72.0}),
+                          Cubierta("aislacion_terreno", manta, (SUP,), (0,), {0: 100.0})])
+    inicio = np.array([5.0, 9.0])
+    tabla, combos = plan.tabla(0.0, inicio, 2)
+    assert combos[tabla[0, SUP]] == (manta,) and combos[tabla[0, LAT]] == ()  # sólo la superficie del suelo
+    assert tabla[1, LAT] == 0  # V1 todavía no existe
+    tabla, combos = plan.tabla(101.0, inicio, 2)
+    assert combos[tabla[0, SUP]] == ()
+    assert plan.eventos(inicio) == [(77.0, "retiro de moldaje (terciado) de la Vertida_01"),
+                                    (100.0, "retiro de aislacion_terreno (manta) del terreno")]
+    sin = PlanCubiertas([Cubierta("moldaje", TERCIADO, (LAT,), (1,), {1: 72.0})]).tabla(0.0, inicio, 2)[0]
+    assert (sin[0] == 0).all()  # sin manta en el terreno, la fila del suelo queda desnuda como antes
+
+
 def test_moldaje_es_una_resistencia_en_serie_y_el_desmolde_la_quita():
     """Caja con moldaje lateral que se retira a las 5 h, contra solver_nd en dos tramos con h' = 1/(1/h + R)."""
     vox = _vox_cajas([4])

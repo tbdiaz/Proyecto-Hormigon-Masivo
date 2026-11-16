@@ -22,6 +22,7 @@
   }
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 body { margin: 0; background: var(--fondo); color: var(--texto);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; font-variant-numeric: tabular-nums; }
 main { max-width: 1500px; margin: 0 auto; padding: 20px 20px 48px; display: grid; gap: 14px; }
@@ -115,6 +116,8 @@ pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radiu
         <div class="fila">
           <label class="check"><input type="checkbox" id="cortar" checked> Cortar un cuarto</label>
           <label class="check" id="lblTubos" hidden><input type="checkbox" id="verTubos" checked> Tubos</label>
+          <label class="check" id="lblTerreno" hidden><input type="checkbox" id="verTerreno" checked> Terreno</label>
+          <label class="check" id="lblRelleno" hidden><input type="checkbox" id="verRelleno" checked> Relleno</label>
           <label class="check" id="lblExtremos" hidden><input type="checkbox" id="verExtremos" checked> Más caliente / más fría</label>
           <label class="check">Escala z <select id="escalaZ"><option value="1">1×</option><option value="2" selected>2×</option></select></label>
           <button id="reset" type="button">Reiniciar vista</button>
@@ -146,7 +149,7 @@ pre { margin: 8px 0 0; padding: 8px 10px; background: var(--fondo); border-radiu
     </div>
     <div class="leyenda" id="leyenda"></div>
     <svg id="grafico" role="img" aria-label="Temperatura en función del tiempo"></svg>
-    <p class="nota">Las líneas punteadas verticales marcan cada colocación; las discontinuas, el retiro de moldaje o aislación. Haz clic en el gráfico para llevar la vista a ese instante.</p>
+    <p class="nota">Las líneas punteadas verticales marcan cada colocación; las discontinuas, el retiro de moldaje o aislación y la colocación del relleno. Haz clic en el gráfico para llevar la vista a ese instante.</p>
   </section>
 
   <section class="datos">
@@ -246,7 +249,7 @@ async function descomprimir(b64) {
   return new Response(new Blob([crudo]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
 }
 const est = { fr: 0, plano: "xz", pos: { xz: 0, yz: 0, xy: 0 }, cortar: true, zs: 2, yaw: -0.85, pitch: 0.55, zoom: 1, vis: D.vertidas.map(() => true), curvas: "global", ocultas: new Set(),
-              tubos: true, extremos: true };
+              tubos: true, extremos: true, relleno: true, terreno: true };
 // Vóxel más caliente (rojo fuerte) y más frío (verde) del instante: [clave, color, etiqueta]
 const EXTREMOS = [["max", [235, 0, 0], "Más caliente"], ["min", [0, 205, 70], "Más fría"]];
 const extremosAhora = () => (V.extremos && V.extremos[est.fr]) || null;
@@ -339,6 +342,36 @@ function dibujar3D() {
       g.stroke();
     }
   }
+  // Niveles a trazos en toda la planta de la grilla: terreno natural (excavación) y relleno (desde que se coloca),
+  // con su leyenda fija arriba a la izquierda (las esquinas suelen quedar fuera de la vista).
+  const niveles = [];
+  const E = D.excavacion, R = D.relleno;
+  if (est.terreno && E && E.cota_m > 0) niveles.push([E.cota_m, "#5f8a4e", `terreno natural z = ${fmt(E.cota_m, 2)} m (hoyo de ${fmt(E.sobreancho_m, 1)} m de sobreancho)`]);
+  if (est.relleno && R && R.colocado && tActual() >= R.t_h - 1e-9) niveles.push([R.z_real_m, "#b07a3b", `relleno hasta z = ${fmt(R.z_real_m, 2)} m${R.entera ? " (enterrada entera)" : ""}`]);
+  niveles.forEach(([zr, color, leyenda], n) => {
+    const x0 = V.origen[0], x1 = x0 + V.forma[0] * V.d, y0 = V.origen[1], y1 = y0 + V.forma[1] * V.d;
+    const esquinas = [[x0, y0], [x1, y0], [x1, y1], [x0, y1]];
+    g.save();
+    g.strokeStyle = color; g.lineWidth = 1.8; g.setLineDash([7, 5]);
+    g.beginPath();
+    esquinas.forEach(([x, y], i) => { const [su, sv] = pantalla(x, y, zr); i ? g.lineTo(su, sv) : g.moveTo(su, sv); });
+    g.closePath(); g.stroke();
+    g.lineWidth = 1; g.setLineDash([3, 4]);  // aristas verticales hasta z = 0 para que se lea la altura
+    for (const [x, y] of esquinas) {
+      const [a, b] = pantalla(x, y, zr), [c, d2] = pantalla(x, y, 0);
+      g.beginPath(); g.moveTo(a, b); g.lineTo(c, d2); g.stroke();
+    }
+    const yl = 14 + n * 22;
+    g.setLineDash([]);
+    g.font = "600 12px system-ui"; g.textBaseline = "middle";
+    g.fillStyle = css("--tarjeta"); g.fillRect(4, yl - 10, g.measureText(leyenda).width + 44, 21);
+    g.setLineDash([7, 5]); g.lineWidth = 1.8;
+    g.beginPath(); g.moveTo(10, yl); g.lineTo(34, yl); g.stroke();
+    g.setLineDash([]);
+    g.fillStyle = color;
+    g.fillText(leyenda, 40, yl + 0.5);
+    g.restore();
+  });
   // Vóxel más caliente y más frío: un cubo de color fuerte con un anillo y su temperatura, encima de todo
   const ext = extremosAhora();
   if (est.extremos && ext) {
@@ -715,7 +748,19 @@ function contenido() {
   for (const linea of A.cubiertas) amb.append(el("p", {}, el("b", {}, "Capa: "), linea));
   for (const t of D.tubos || []) amb.append(el("p", {}, el("b", {}, "Tubo: "),
     `${t.nombre}: ${t.material}, ${fmt(t.largo_m, 0)} m, ${fmt(t.caudal_l_min, 0)} L/min, agua a ${fmt(t.T_agua_C)} °C; potencia máxima ${fmt(t.potencia_max_kW)} kW (celeste en la vista 3D y en los cortes)`));
-  if (D.retiros.length) amb.append(el("p", {}, el("b", {}, "Retiros: "), D.retiros.map(r => `${fmt(r.t, 0)} h: ${r.evento}`).join("; ")));
+  if (D.excavacion) {
+    amb.append(el("p", {}, el("b", {}, "Excavación: "), D.excavacion.descripcion + ". Línea verde a trazos en la vista 3D; en los cortes, el suelo natural forma las paredes del hoyo."));
+    if (!D.excavacion.fisico) amb.append(el("p", { class: "nota" }, "⚠ Con el modelo de superficie combinado (h fijo) la excavación no cambia el viento ni el cielo; sólo agrega el suelo natural alrededor."));
+  }
+  if (D.relleno) {
+    const R = D.relleno;
+    const alcance = R.entera ? "fundación enterrada entera" : `entierra ${R.vertidas.join(", ") || "nada"}`;
+    const cuando = R.colocado ? `colocado a las ${fmt(R.t_h, 0)} h a ${fmt(R.T_C)} °C (${R.origen_T})` : `se colocaría a las ${fmt(R.t_h, 0)} h, después del horizonte simulado`;
+    amb.append(el("p", {}, el("b", {}, "Relleno: "),
+      `hasta z = ${fmt(R.z_real_m, 2)} m sobre el terreno (${alcance}; el hormigón llega a z = ${fmt(R.tope_hormigon_m, 2)} m), ${fmt(R.volumen_m3, 0)} m³ de tierra con k = ${fmt(R.k_efectivo, 2)} W/mK; ${cuando}. Línea café a trazos en la vista 3D; en los cortes se ve como suelo.`));
+    for (const a of R.avisos) amb.append(el("p", { class: "nota" }, "⚠ " + a));
+  }
+  if (D.retiros.length) amb.append(el("p", {}, el("b", {}, "Retiros y relleno: "), D.retiros.map(r => `${fmt(r.t, 0)} h: ${r.evento}`).join("; ")));
   if (A.clima) {
     const C = A.clima, lista = [`desde ${A.fecha_inicio} (hora local ${C.zona_horaria})`,
       `${C.horas_pronostico} h de pronóstico, ${C.horas_transicion} h de transición, ${C.horas_climatologia} h de climatología`];
@@ -771,6 +816,14 @@ function contenido() {
     $("vistasCurvas").append(bt);
   }
   $("cortar").onchange = e => { est.cortar = e.target.checked; construirCaras(); pedir(dibujar3D); };
+  if (D.excavacion && D.excavacion.cota_m > 0) {
+    $("lblTerreno").hidden = false;
+    $("verTerreno").onchange = e => { est.terreno = e.target.checked; pedir(dibujar3D); };
+  }
+  if (D.relleno && D.relleno.colocado) {
+    $("lblRelleno").hidden = false;
+    $("verRelleno").onchange = e => { est.relleno = e.target.checked; pedir(dibujar3D); };
+  }
   if (D.tubos && D.tubos.length) {
     $("lblTubos").hidden = false;
     $("verTubos").onchange = e => { est.tubos = e.target.checked; pedir(dibujar3D); };

@@ -53,6 +53,11 @@ class Dominio:
     material: np.ndarray  # (nx, ny, nz) int8: VACIO_M, SUELO, HORMIGON
     vertida_id: np.ndarray  # (nx, ny, nz) int8: 0 o 1..n
     vox: Voxelizacion  # la voxelización original (volúmenes, nombres, pset)
+    relleno: np.ndarray | None = None  # máscara de las celdas de relleno (material SUELO; aparecen al colocarlo)
+    excavacion: "Excavacion | None" = None  # fundación dentro de un hoyo (abrigo del viento y del cielo)
+    cota_terreno: float = 0.0  # z del terreno natural [m] (0 sin excavación: la base se apoya en el terreno)
+    distancia_plano: np.ndarray | None = None  # (nx, ny) distancia al borde de la base [m]: > 0 afuera
+    natural: np.ndarray | None = None  # máscara del suelo natural sobre z = 0 (paredes del hoyo)
 
     @property
     def forma(self):
@@ -69,25 +74,165 @@ class Dominio:
         return tuple(i)
 
 
-def construir_dominio(vox: Voxelizacion, profundidad_suelo: float = 3.0, margen_suelo: float = 2.0) -> Dominio:
+# Terreno según EN 1991-1-4, tabla 4.1: categoría -> (z0 [m], z_min [m])
+CATEGORIAS_TERRENO = {"0": (0.003, 1.0), "I": (0.01, 1.0), "II": (0.05, 2.0), "III": (0.3, 5.0), "IV": (1.0, 10.0)}
+
+
+@dataclass
+class Excavacion:
+    """La fundación construida dentro de un hoyo: menos viento y menos cielo bajo el terreno natural.
+
+    - El terreno natural está a z = profundidad_m sobre la base (z = 0). Fuera del hoyo (a más de
+      sobreancho_m del borde de la base, paredes verticales) hay suelo natural desde z = 0 hasta esa cota.
+    - Viento: el de 10 m se lleva a la altura de cada cara con el perfil logarítmico de EN 1991-1-4,
+      v(h)/v(10) = ln(max(h, z_min)/z0) / ln(10/z0), con h sobre el terreno natural (si perfil_viento).
+      Dentro del hoyo, además, se multiplica por factor_abrigo (viento al fondo de una calle encajonada de
+      alto ≈ ancho: ~2/3 del de arriba, Nakamura y Oke 1988).
+    - Cielo y sol: dentro del hoyo cada cara ve sólo la abertura. Fracción de cielo de una franja en un
+      hoyo largo de ancho G y a la profundidad d (cuerdas cruzadas de Hottel, 2D):
+      vertical 0,5 (1 - d/√(d² + G²)); horizontal con un lado abierto 0,5 (1 + G/√(G² + d²)).
+      El sol directo se reduce en la misma fracción (no se sigue la posición del sol).
+    Sólo actúa con el modelo de superficie "fisico".
+    """
+
+    profundidad_m: float  # cota del terreno natural sobre la base [m]
+    sobreancho_m: float = 1.0  # del borde de la base a la pared del hoyo [m]
+    factor_abrigo: float = 2 / 3  # viento dentro del hoyo / viento a nivel del terreno
+    categoria: str = "II"  # terreno EN 1991-1-4 para el perfil del viento
+    perfil_viento: bool = True  # llevar el viento de 10 m a la altura de cada cara
+
+    def __post_init__(self):
+        if self.categoria not in CATEGORIAS_TERRENO:
+            raise ValueError(f"Categoría de terreno {self.categoria!r}: usa {', '.join(CATEGORIAS_TERRENO)}")
+        if self.profundidad_m < 0 or self.sobreancho_m <= 0 or not 0 <= self.factor_abrigo <= 1:
+            raise ValueError("Excavación: profundidad >= 0, sobreancho > 0 y factor de abrigo entre 0 y 1")
+
+    def factor_altura(self, h):
+        """v(h)/v(10 m) según EN 1991-1-4 (bajo z_min, el valor de z_min); 1 si no se corrige el perfil."""
+        if not self.perfil_viento:
+            return np.ones_like(np.asarray(h, dtype=float))
+        z0, zmin = CATEGORIAS_TERRENO[self.categoria]
+        return np.log(np.maximum(np.asarray(h, dtype=float), zmin) / z0) / math.log(10.0 / z0)
+
+    def factores(self, dom: "Dominio", celda, direccion, orientacion):
+        """(f_viento, f_cielo, f_sol) de cada cara expuesta (índice plano de su celda y dirección 0..5)."""
+        dx = dom.dx
+        i, j, k = np.unravel_index(celda, dom.forma)
+        z = dom.centros(2)[k] + np.where(direccion == 5, dx / 2, np.where(direccion == 4, -dx / 2, 0.0))
+        h = z - dom.cota_terreno  # altura sobre el terreno natural (negativa: dentro del hoyo)
+        bajo = h < -1e-9
+        f_v = np.where(bajo, self.factor_altura(0.0) * self.factor_abrigo, self.factor_altura(h))
+        d = np.maximum(-h, 0.0)
+        s = dom.distancia_plano[i, j]  # al borde de la base: > 0 afuera (hacia la pared), < 0 adentro
+        W = self.sobreancho_m
+        lateral = orientacion == LAT
+        # Distancia horizontal a lo que tapa el cielo: el hormigón mira a la pared (W - s); el suelo, a la base (s).
+        G = np.maximum(np.where(s <= 0, W - s, np.where(lateral, s, W - s)), dx / 2)
+        c_lat = 0.5 * (1 - d / np.hypot(d, G))
+        c_sup = np.where(s <= 0, 0.5 * (1 + G / np.hypot(G, d)),  # escalones del hormigón: un lado abierto
+                         0.5 * (G / np.hypot(G, d) + np.maximum(s, dx / 2) / np.hypot(np.maximum(s, dx / 2), d)))
+        from .bordes import F_CIELO, F_SOL
+
+        f_c = np.where(bajo, np.where(lateral, c_lat, np.where(orientacion == SUP, c_sup, 0.0)), F_CIELO[orientacion])
+        f_s = np.where(bajo & (orientacion == SUP), f_c, F_SOL[orientacion])
+        return f_v, f_c, f_s
+
+    def describir(self, cota_real: float) -> str:
+        z0, zmin = CATEGORIAS_TERRENO[self.categoria]
+        f0 = float(self.factor_altura(0.0))
+        perfil = (f"viento llevado a la altura de cada cara (EN 1991-1-4, categoría {self.categoria}: z0 = {z0:g} m, "
+                  f"z_min = {zmin:g} m; {f0:.2f} del de 10 m bajo z_min)" if self.perfil_viento else
+                  "viento a 10 m sobre el terreno")
+        return (f"terreno natural a z = {cota_real:.2f} m sobre la base, hoyo con sobreancho "
+                f"{self.sobreancho_m:g} m y paredes verticales; {perfil}; dentro del hoyo × {self.factor_abrigo:.2f} "
+                f"(abrigo) = {f0 * self.factor_abrigo:.2f} del viento a 10 m; cielo y sol según la abertura que ve "
+                f"cada cara")
+
+
+def _distancia_huella(huella: np.ndarray, dx: float) -> np.ndarray:
+    """Distancia horizontal [m] de cada columna de la planta al borde de la huella: > 0 afuera, < 0 adentro.
+
+    Se mide entre centros de celda contra las celdas del borde del otro lado, menos media celda.
+    """
+    ii, jj = np.indices(huella.shape)
+    p = np.pad(huella, 1, constant_values=False)
+    vecino_fuera = ~(p[:-2, 1:-1] & p[2:, 1:-1] & p[1:-1, :-2] & p[1:-1, 2:])
+    vecino_dentro = p[:-2, 1:-1] | p[2:, 1:-1] | p[1:-1, :-2] | p[1:-1, 2:]
+    s = np.zeros(huella.shape)
+    for lado, borde, signo in ((~huella, huella & vecino_fuera, 1.0), (huella, ~huella & vecino_dentro, -1.0)):
+        if not lado.any() or not borde.any():
+            continue
+        pb = np.column_stack([ii[borde], jj[borde]]).astype(float)
+        pc = np.column_stack([ii[lado], jj[lado]]).astype(float)
+        dmin = np.empty(len(pc))
+        for a in range(0, len(pc), 2048):
+            q = pc[a:a + 2048]
+            dmin[a:a + 2048] = np.sqrt(((q[:, None, :] - pb[None, :, :]) ** 2).sum(axis=2)).min(axis=1)
+        s[lado] = signo * (dmin - 0.5) * dx
+    return s
+
+
+def construir_dominio(vox: Voxelizacion, profundidad_suelo: float = 3.0, margen_suelo: float = 2.0,
+                      relleno_z: float | None = None, excavacion: Excavacion | None = None) -> Dominio:
     """Agrega a la voxelización una capa de suelo bajo z = 0 y un margen lateral.
 
     La voxelización ya deja una celda de aire alrededor. Aquí se agregan
     `margen_suelo` metros de grilla a cada lado (aire arriba de z = 0, suelo
     abajo) y celdas de suelo hasta z = -profundidad_suelo. Con profundidad 0 no
     hay suelo: la base queda expuesta (útil para comparar con solver_nd).
+
+    relleno_z: si se indica, el aire entre z = 0 y z = relleno_z pasa a ser relleno (tierra) en
+    toda la planta de la grilla, fuera del hormigón. Si relleno_z pasa la cara superior de la
+    fundación, la grilla crece hacia arriba para dejar el relleno con al menos una celda de aire
+    encima (su cara superior queda expuesta al clima). Las celdas de relleno quedan marcadas en
+    `dom.relleno` y no existen hasta que simular_3d las coloca (ver Relleno).
+
+    excavacion: la fundación dentro de un hoyo (ver Excavacion). Fuera del hoyo se agrega suelo natural
+    desde z = 0 hasta el terreno; el margen crece si hace falta para dejar al menos 1 m de ese suelo.
     """
     dx = vox.dx
-    m = int(round(margen_suelo / dx)) if profundidad_suelo > 0 else 0
+    if (relleno_z is not None or excavacion is not None) and profundidad_suelo <= 0:
+        raise ValueError("El relleno y la excavación necesitan suelo bajo la fundación (suelo.profundidad > 0)")
+    margen = margen_suelo
+    if excavacion is not None:
+        margen = max(margen_suelo, excavacion.sobreancho_m + 1.0)
+    m = int(round(margen / dx)) if profundidad_suelo > 0 else 0
     k0 = int(round(-vox.origen[2] / dx))  # capas de la voxelización bajo z = 0
     p = max(int(round(profundidad_suelo / dx)) - k0, 0) if profundidad_suelo > 0 else 0
-    vid = np.pad(vox.vertida_id, ((m, m), (m, m), (p, 0)))
+    arriba = 0
+    alturas = []
+    if relleno_z is not None:
+        if relleno_z <= 0:
+            raise ValueError(f"La altura del relleno debe ser positiva (z = {relleno_z:g} m)")
+        alturas.append(relleno_z)
+    if excavacion is not None and excavacion.profundidad_m > 0:
+        alturas.append(excavacion.profundidad_m)
+    if alturas:
+        capas = math.ceil(max(alturas) / dx - 0.5 - 1e-9)  # celdas con centro bajo esa altura
+        sobre_cero = vox.vertida_id.shape[2] - k0
+        arriba = max(0, capas + 1 - sobre_cero)  # y al menos una capa de aire encima
+    vid = np.pad(vox.vertida_id, ((m, m), (m, m), (p, arriba)))
     origen = vox.origen - np.array([m, m, p]) * dx
     material = np.where(vid != VACIO, HORMIGON, VACIO_M).astype(np.int8)
+    relleno = natural = distancia = None
+    cota = 0.0
     if profundidad_suelo > 0:
         zc = origen[2] + (np.arange(vid.shape[2]) + 0.5) * dx
         material[:, :, zc < 0] = SUELO
-    return Dominio(dx=dx, origen=origen, material=material, vertida_id=vid, vox=vox)
+        if excavacion is not None:
+            distancia = _distancia_huella((vid != VACIO).any(axis=2), dx)
+            capas_t = (zc > 0) & (zc < excavacion.profundidad_m)
+            cota = float(np.count_nonzero(capas_t) * dx)
+            natural = ((material == VACIO_M) & capas_t[None, None, :]
+                       & (distancia >= excavacion.sobreancho_m - 1e-9)[:, :, None])
+            material[natural] = SUELO
+        if relleno_z is not None:
+            relleno = (material == VACIO_M) & ((zc > 0) & (zc < relleno_z))[None, None, :]
+            if not relleno.any():
+                raise ValueError(f"El relleno hasta z = {relleno_z:g} m no alcanza ninguna celda (dx = {dx:g} m)")
+            material[relleno] = SUELO
+    return Dominio(dx=dx, origen=origen, material=material, vertida_id=vid, vox=vox, relleno=relleno,
+                   excavacion=excavacion, cota_terreno=cota, distancia_plano=distancia, natural=natural)
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +291,80 @@ class Activacion:
         return [v + 1 for v, t in enumerate(self.inicio_h) if t <= t_h + 1e-9]
 
 
+@dataclass
+class Relleno:
+    """Tierra de relleno sobre el terreno (z = 0) hasta z_m: entierra la fundación en parte o entera.
+
+    Las celdas de relleno (dom.relleno, ver construir_dominio) aparecen a la hora `desde_h` a la
+    temperatura `T_C` y desde ahí conducen como el suelo. Las caras del hormigón que quedan en
+    contacto con el relleno dejan de recibir viento, sol y cielo; su capa (moldaje o aislación), si
+    todavía estaba puesta, deja de contar. Las caras del borde de la grilla siguen adiabáticas.
+    """
+
+    z_m: float  # altura del relleno sobre el terreno [m]
+    desde_h: float | None = None  # hora de colocación (desde la Vertida_01); None = automática (ver resolver)
+    T_C: float | None = None  # temperatura de colocación; None = media del aire en las 24 h anteriores
+    material: Material | None = None  # None = el suelo del caso
+
+    def resolver(self, dom: "Dominio", cubiertas: PlanCubiertas, act: Activacion, ambiente: Ambiente) -> dict:
+        """Hora y temperatura de colocación, vertidas que entierra y avisos (para la salida y el panel).
+
+        Hora automática: cuando la última vertida que toca el relleno ya está colocada y se retiraron
+        sus capas (moldaje o aislación) con retiro finito.
+        """
+        if dom.relleno is None:
+            raise ValueError("El dominio no tiene relleno: constrúyelo con construir_dominio(..., relleno_z=...)")
+        r, vid = dom.relleno, dom.vertida_id
+        toca = np.zeros_like(r)
+        for eje in range(3):
+            toca |= np.roll(r, 1, axis=eje) | np.roll(r, -1, axis=eje)
+        tocadas = sorted(int(v) for v in np.unique(vid[toca & (dom.material == HORMIGON)]) if v > 0
+                         and np.isfinite(act.inicio_h[v - 1]))
+        capas = [(c, v, float(act.fin_h[v - 1]) + float(c.retiro_h.get(v, np.inf)))
+                 for c in cubiertas.cubiertas for v in c.vertidas if v in tocadas]
+        if self.desde_h is not None:
+            t = float(self.desde_h)
+            criterio = "indicada"
+        else:
+            fines = [float(act.fin_h[v - 1]) for v in tocadas]
+            t = max(fines + [t_r for _, _, t_r in capas if np.isfinite(t_r)], default=0.0)
+            criterio = "automática: colocadas y descubiertas las vertidas que toca"
+        if self.T_C is not None:
+            T, origen_T = float(self.T_C), "indicada"
+        else:
+            horas = np.arange(max(t - 24.0, 0.0), t + 1e-9, 1.0)
+            T = float(np.mean([ambiente.temperatura(h * 3600.0) for h in horas]))
+            origen_T = "media del aire en las 24 h anteriores"
+        avisos = []
+        for c, v, t_r in capas:
+            if t_r > t + 1e-9:
+                cuando = "no se retira" if not np.isfinite(t_r) else f"se retira a las {t_r:g} h"
+                avisos.append(f"el {c.tipo} ({c.capa.nombre}) de la Vertida_{v:02d} {cuando}: donde el relleno toca "
+                              "esas caras, el modelo pone el relleno en contacto directo con el hormigón")
+        for v in tocadas:
+            if act.fin_h[v - 1] > t + 1e-9:
+                avisos.append(f"la Vertida_{v:02d} se termina de colocar después del relleno (a las "
+                              f"{act.fin_h[v - 1]:g} h)")
+        n = int(np.count_nonzero(r))
+        k_r = (self.material.k if self.material else None)
+        zc = dom.centros(2)
+        z_real = float(zc[np.flatnonzero(r.any(axis=(0, 1))).max()] + dom.dx / 2)
+        tope = float(zc[np.flatnonzero((dom.material == HORMIGON).any(axis=(0, 1))).max()] + dom.dx / 2)
+        return {"z_m": self.z_m, "z_real_m": z_real, "tope_hormigon_m": tope, "entera": z_real >= tope - 1e-9,
+                "t_h": t, "criterio_t": criterio, "T_C": T, "origen_T": origen_T, "celdas": n,
+                "volumen_m3": n * dom.dx**3, "k": k_r, "rho": self.material.rho if self.material else None,
+                "cp": self.material.cp if self.material else None,
+                "vertidas": [dom.vox.nombres[v - 1] for v in tocadas], "avisos": avisos}
+
+    @staticmethod
+    def describir(info: dict, suelo: "Material") -> str:
+        k = info["k"] if info["k"] is not None else suelo.k
+        alcance = "fundación enterrada entera" if info["entera"] else f"entierra {', '.join(info['vertidas']) or 'nada'}"
+        return (f"relleno hasta z = {info['z_real_m']:.2f} m ({alcance}; hormigón hasta z = "
+                f"{info['tope_hormigon_m']:.2f} m), {info['volumen_m3']:.0f} m³ de tierra con k = {k:g} W/mK, "
+                f"colocado a las {info['t_h']:g} h ({info['criterio_t']}) a {info['T_C']:.1f} °C ({info['origen_T']})")
+
+
 _NORMALES = np.array([[-1, 0, 0], [1, 0, 0], [0, -1, 0], [0, 1, 0], [0, 0, -1], [0, 0, 1]], dtype=float)
 
 
@@ -192,9 +411,15 @@ class _Etapa:
     expuesta: np.ndarray  # máscara: hormigón con alguna cara expuesta con h > 0
     dt_critico: float
     combos: tuple
+    caras_r: tuple = ()  # (celda de hormigón, celda de relleno, dirección, plana) de cada cara enterrada
+    enterrada: np.ndarray | None = None  # máscara: hormigón con alguna cara en contacto con el relleno
+    cat_fv: np.ndarray | None = None  # excavación: factor sobre el viento a 10 m de cada categoría
+    cat_fc: np.ndarray | None = None  # excavación: fracción de cielo
+    cat_fs: np.ndarray | None = None  # excavación: fracción del sol
 
     def coeficientes(self, ambiente, t_s, dx):
-        h, T_eq = ambiente.exterior(t_s, self.cat_orientacion, self.cat_alfa, self.cat_eps)
+        h, T_eq = ambiente.exterior(t_s, self.cat_orientacion, self.cat_alfa, self.cat_eps,
+                                    self.cat_fv, self.cat_fc, self.cat_fs)
         return coeficiente_U(h, self.cat_R, dx, self.cat_k), T_eq
 
 
@@ -218,8 +443,15 @@ def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, sumidero=N
     combo = tabla[dom.vertida_id.reshape(-1)[celda].astype(np.int64), orientacion]
     # La conductividad de la celda entra en la categoría: con materiales por vertida no es una sola.
     k_valores, k_indice = np.unique(k.reshape(-1)[celda], return_inverse=True)
-    claves, categoria = np.unique(np.stack([orientacion, combo, material, k_indice.reshape(-1)], axis=1), axis=0,
-                                  return_inverse=True)
+    columnas = [orientacion, combo, material, k_indice.reshape(-1)]
+    factores = None
+    if dom.excavacion is not None and amb.modelo == "fisico":
+        # Viento, cielo y sol de cada cara (redondeados para que las categorías sigan siendo pocas).
+        fv, fc, fs = dom.excavacion.factores(dom, celda, direccion, orientacion)
+        factores, f_indice = np.unique(np.stack([np.round(fv, 2), np.round(fc * 20) / 20, np.round(fs * 20) / 20],
+                                                axis=1), axis=0, return_inverse=True)
+        columnas.append(f_indice.reshape(-1))
+    claves, categoria = np.unique(np.stack(columnas, axis=1), axis=0, return_inverse=True)
     categoria = categoria.reshape(-1)
     capas = [combos[c] for c in claves[:, 1]]
     cat_k = k_valores[claves[:, 3]].astype(float)
@@ -244,8 +476,35 @@ def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, sumidero=N
     expuesta.reshape(-1)[superficie[con_h]] = True
     expuesta &= dom.material == HORMIGON
     de_hormigon = material == HORMIGON
-    # Cara "plana": su celda tiene una sola cara expuesta (no es arista ni vértice de la escalera de vóxeles).
-    plana = (N.sum(axis=1) == 1)[fila.reshape(-1)]
+
+    # Caras enterradas: hormigón que existe junto a relleno ya colocado. No son bordes (conducen por G),
+    # pero siguen siendo la superficie del hormigón para el criterio de ΔT.
+    h_r, r_r, d_r = [], [], []
+    enterrada = np.zeros(dom.forma, dtype=bool)
+    if dom.relleno is not None:
+        h_act, r_act = activas & (dom.material == HORMIGON), activas & dom.relleno
+        if r_act.any():
+            indice = np.arange(activas.size).reshape(dom.forma)
+            for eje in range(3):
+                a = [slice(None)] * 3
+                b = [slice(None)] * 3
+                a[eje], b[eje] = slice(None, -1), slice(1, None)
+                a, b = tuple(a), tuple(b)
+                hr, rh = h_act[a] & r_act[b], r_act[a] & h_act[b]  # relleno en +eje / en -eje del hormigón
+                h_r += [indice[a][hr], indice[b][rh]]
+                r_r += [indice[b][hr], indice[a][rh]]
+                d_r += [np.full(np.count_nonzero(hr), 2 * eje + 1), np.full(np.count_nonzero(rh), 2 * eje)]
+    vacio = np.zeros(0, dtype=np.int64)
+    h_r = np.concatenate(h_r) if h_r else vacio
+    r_r = np.concatenate(r_r) if r_r else vacio
+    d_r = np.concatenate(d_r) if d_r else vacio
+    enterrada.reshape(-1)[h_r] = True
+    # Cara "plana": su celda tiene una sola cara de superficie, expuesta o enterrada (no es arista ni vértice
+    # de la escalera de vóxeles).
+    n_caras = np.zeros(activas.size)
+    np.add.at(n_caras, celda, 1.0)
+    np.add.at(n_caras, h_r, 1.0)
+    plana = n_caras[celda] == 1
     coef = np.where(activas, suma / C, 0.0)
     return _Etapa(
         activas=activas.copy(), G=G, superficie=superficie, N=N, cat_orientacion=claves[:, 0], cat_R=cat_R,
@@ -253,6 +512,10 @@ def _etapa(dom: Dominio, activas, k, C, amb: Ambiente, tabla, combos, sumidero=N
         caras_h=(celda[de_hormigon], categoria[de_hormigon], direccion[de_hormigon], plana[de_hormigon]), fondo=fondo,
         g_fondo=g_fondo, expuesta=expuesta, dt_critico=1.0 / coef.max() if coef.max() > 0 else math.inf,
         combos=tuple(tuple(c.nombre for c in cs) for cs in combos),
+        caras_r=(h_r, r_r, d_r, n_caras[h_r] == 1), enterrada=enterrada,
+        cat_fv=None if factores is None else factores[claves[:, 4], 0],
+        cat_fc=None if factores is None else factores[claves[:, 4], 1],
+        cat_fs=None if factores is None else factores[claves[:, 4], 2],
     )
 
 
@@ -283,6 +546,7 @@ class Resultado3D:
     Tmin_todas_pos: np.ndarray | None = None
     balance: dict = field(default_factory=dict)  # balance de energía [J] (ver simular_3d)
     tubos: dict = field(default_factory=dict)  # circuito -> series de potencia extraída, T de salida, ΔT agua-hormigón
+    relleno: dict | None = None  # Relleno.resolver(): hora, temperatura, volumen, vertidas que entierra, avisos
 
     @property
     def dT(self) -> np.ndarray:
@@ -290,10 +554,11 @@ class Resultado3D:
 
     @property
     def criterio_Tmin(self) -> str:
+        enterradas = " y enterradas" if self.relleno and self.relleno.get("colocado") else ""
         if self.profundidad_tmin is None:
-            return "Tmin en el centro de las celdas de superficie"
+            return f"Tmin en el centro de las celdas de superficie (expuestas{enterradas})"
         donde = "caras planas (sin aristas ni vértices)" if self.superficie_tmin == "plana" else "todas las caras"
-        return f"Tmin a {self.profundidad_tmin * 1000:g} mm bajo las superficies expuestas, en {donde}"
+        return f"Tmin a {self.profundidad_tmin * 1000:g} mm bajo las superficies expuestas{enterradas}, en {donde}"
 
 
 def simular_3d(
@@ -318,6 +583,7 @@ def simular_3d(
     activacion: Activacion | None = None,
     materiales_vertida: dict | None = None,
     tubos: list | None = None,
+    relleno: Relleno | None = None,
 ) -> Resultado3D:
     """Integra la fundación por etapas: entre eventos (colocación o retiro de una capa) la geometría no cambia.
 
@@ -331,6 +597,9 @@ def simular_3d(
     activacion: hora y temperatura de colocación de cada celda (por defecto, la de `plan`).
     materiales_vertida: {vertida: Material} para hormigones distintos por vertida (p. ej. más conductivo).
     tubos: circuitos de enfriamiento (tubos.Circuito con su recorrido en celdas).
+    relleno: tierra sobre el terreno que entierra la fundación (Relleno; el dominio debe traer dom.relleno).
+    Las caras enterradas siguen contando para Tmin: a la profundidad p bajo la junta hormigón-relleno,
+    interpolando entre la junta (media ponderada por k) y el centro de la celda.
 
     Balance de energía (res.balance): E_final - E_inicial = colocación + hidratación + bordes + fondo,
     con E = suma de C T V sobre las celdas que existen. Euler explícito lo cumple a precisión de máquina;
@@ -347,9 +616,18 @@ def simular_3d(
         celdas_v = es_h & (dom.vertida_id == int(v))
         k = np.where(celdas_v, m.k, k)
         C = np.where(celdas_v, m.capacidad, C)
+    if relleno is not None and dom.relleno is None:
+        raise ValueError("Hay relleno pero el dominio no lo trae: constrúyelo con construir_dominio(..., relleno_z=)")
+    mascara_r = dom.relleno if relleno is not None else np.zeros(forma, dtype=bool)
+    if relleno is not None and relleno.material is not None:
+        k = np.where(mascara_r, relleno.material.k, k)
+        C = np.where(mascara_r, relleno.material.capacidad, C)
     Cv, kv = C.reshape(-1), k.reshape(-1)
     zc = dom.centros(2)
-    perfil = T_suelo_inicial(zc) if callable(T_suelo_inicial) else np.full(zc.shape, float(T_suelo_inicial))
+    # Perfil inicial del suelo según la profundidad bajo el terreno natural (con excavación, la cota del terreno;
+    # se supone que el hoyo se abrió poco antes, sin tiempo para que el suelo se ajuste).
+    perfil = (T_suelo_inicial(zc - dom.cota_terreno) if callable(T_suelo_inicial)
+              else np.full(zc.shape, float(T_suelo_inicial)))
     T = np.where(es_s, np.broadcast_to(perfil, forma), np.nan)
     edad = np.zeros(forma)
     if superficie_tmin not in ("plana", "todas"):
@@ -358,7 +636,7 @@ def simular_3d(
         raise ValueError(f"profundidad_tmin debe estar entre 0 y dx/2 = {dx / 2:g} m")
 
     vox_id = dom.vertida_id
-    activas = es_s.copy()
+    activas = es_s & ~mascara_r  # el relleno aparece cuando se coloca
     ids_h = np.flatnonzero(es_h)  # sólo estas celdas hidratan: se trabaja sobre ellas
 
     puntos = puntos or {}
@@ -384,7 +662,7 @@ def simular_3d(
         """(Tmin, posición) del criterio y (Tmin, posición) contando aristas, en el hormigón que existe."""
         nada = (np.nan, [np.nan] * 3)
         if profundidad_tmin is None:
-            sup = activas & es_h & etapa.expuesta
+            sup = activas & es_h & (etapa.expuesta | etapa.enterrada)
             if not sup.any():
                 return nada, nada
             Ts = np.where(sup, T, np.inf)
@@ -392,13 +670,26 @@ def simular_3d(
             r = (float(Ts.reshape(-1)[c]), posicion(c).tolist())
             return r, r
         celda, cat, direccion, plana = etapa.caras_h
-        if len(celda) == 0:
+        h_r, r_r, d_r, plana_r = etapa.caras_r
+        if len(celda) == 0 and len(h_r) == 0:
             return nada, nada
-        U, T_eq = etapa.coeficientes(ambiente, t_h * 3600.0, dx)
-        Tc = T.reshape(-1)[celda]
-        # Perfil lineal en la media celda: flujo q = U (T_eq - Tc) entra por la cara; a la profundidad p:
-        # T(p) = Tc + q (dx/2 - p) / k.  (p = 0 es la superficie del hormigón, bajo el moldaje si lo hay.)
-        T25 = Tc + U[cat] * (T_eq[cat] - Tc) * (dx / 2 - profundidad_tmin) / etapa.cat_k[cat]
+        Tv_ = T.reshape(-1)
+        T25 = np.zeros(0)
+        if len(celda):
+            U, T_eq = etapa.coeficientes(ambiente, t_h * 3600.0, dx)
+            Tc = Tv_[celda]
+            # Perfil lineal en la media celda: flujo q = U (T_eq - Tc) entra por la cara; a la profundidad p:
+            # T(p) = Tc + q (dx/2 - p) / k.  (p = 0 es la superficie del hormigón, bajo el moldaje si lo hay.)
+            T25 = Tc + U[cat] * (T_eq[cat] - Tc) * (dx / 2 - profundidad_tmin) / etapa.cat_k[cat]
+        if len(h_r):
+            # Cara enterrada: la junta está a T_j = (k_h T_h + k_r T_r)/(k_h + k_r) (mismo flujo a ambos lados)
+            # y el perfil es lineal entre la junta y el centro de la celda de hormigón.
+            Th_, Tr_, kh_, kr_ = Tv_[h_r], Tv_[r_r], kv[h_r], kv[r_r]
+            Tj = (kh_ * Th_ + kr_ * Tr_) / (kh_ + kr_)
+            T25 = np.concatenate([T25, Tj + (Th_ - Tj) * profundidad_tmin / (dx / 2)])
+            celda = np.concatenate([celda, h_r])
+            direccion = np.concatenate([direccion, d_r])
+            plana = np.concatenate([plana, plana_r])
 
         def en(f):
             return float(T25[f]), (posicion(celda[f]) + _NORMALES[direccion[f]] * (dx / 2 - profundidad_tmin)).tolist()
@@ -453,6 +744,10 @@ def simular_3d(
     t_act = np.where(es_h, act.t_act, np.inf)
     colocaciones = {float(t) for t in np.unique(t_act[np.isfinite(t_act)]) if 0 <= t <= duracion_h}
     retiros_plan = [(t, d) for t, d in cubiertas.eventos(act.inicio_h, act.fin_h) if 0 <= t <= duracion_h]
+    info_r = relleno.resolver(dom, cubiertas, act, ambiente) if relleno is not None else None
+    t_relleno = info_r["t_h"] if info_r and 0 <= info_r["t_h"] <= duracion_h else None
+    if info_r:
+        info_r["colocado"] = t_relleno is not None
     V = dx**3
     bal = {"hidratacion": 0.0, "bordes": 0.0, "fondo": 0.0, "colocacion": 0.0, "tubos": 0.0}
     # Tubos: ventana de operación absoluta (desde el inicio de su vertida) y U_L de cada tramo.
@@ -473,7 +768,8 @@ def simular_3d(
         return [c for c in circuitos if c["t_on"] - 1e-9 <= t_h < c["t_off"] - 1e-9]
     E_inicial = float(np.sum(np.where(activas, C * np.nan_to_num(T), 0.0))) * V
     hitos = sorted(set(guardados) | colocaciones | {t for t, _ in retiros_plan}
-                   | {t for c in circuitos for t in (c["t_on"], c["t_off"]) if 0 <= t <= duracion_h})
+                   | {t for c in circuitos for t in (c["t_on"], c["t_off"]) if 0 <= t <= duracion_h}
+                   | ({t_relleno} if t_relleno is not None else set()))
 
     etapa = None
     tabla_actual = None
@@ -570,6 +866,15 @@ def simular_3d(
                 retiros.append((t_r, d))
                 if informar:
                     informar(f"t = {t_h:6.1f} h: {d}")
+        if t_relleno is not None and t_prev + 1e-9 < t_relleno <= t_h + 1e-9:
+            T[mascara_r] = info_r["T_C"]
+            activas |= mascara_r
+            bal["colocacion"] += float(np.sum(C[mascara_r])) * info_r["T_C"] * V
+            nuevas = True
+            d = f"colocación del relleno hasta z = {info_r['z_real_m']:.2f} m a {info_r['T_C']:.1f} °C"
+            retiros.append((t_relleno, d))
+            if informar:
+                informar(f"t = {t_h:6.1f} h: {d}")
         tabla, combos = cubiertas.tabla(t_h, act.inicio_h, nv, act.fin_h)
         activos = tubos_activos(t_h)
         for c in circuitos:
@@ -614,6 +919,7 @@ def simular_3d(
                    "U_L_medio": float(np.mean(next(c["UL_L"] / c["circuito"].largos for c in circuitos
                                                     if c["nombre"] == n)))}
                for n, s in series_tubos.items()},
+        relleno=info_r,
     )
 
 
@@ -658,6 +964,29 @@ class Caso3D:
     materiales_cfg: dict = field(default_factory=dict)  # materiales.por_vertida: {vertida: {k, rho, cp}}
     tubos_cfg: list = field(default_factory=list)  # sección `tubos` del YAML
     tubos: list = field(default_factory=list)  # circuitos ya recorridos en celdas (preparar)
+    relleno_cfg: dict = field(default_factory=dict)  # sección `relleno` del YAML: {z, desde_h, T, k, rho, cp}
+    excavacion_cfg: dict = field(default_factory=dict)  # sección `excavacion`: {profundidad, sobreancho, ...}
+
+    def excavacion(self) -> Excavacion | None:
+        """Excavación del YAML o de la línea de comandos (None si no hay)."""
+        d = self.excavacion_cfg or {}
+        if d.get("profundidad") is None:
+            return None
+        return Excavacion(float(d["profundidad"]), float(d.get("sobreancho", 1.0)),
+                          float(d.get("factor_abrigo", 2 / 3)), str(d.get("categoria_terreno", "II")),
+                          bool(d.get("perfil_viento", True)))
+
+    def relleno(self) -> Relleno | None:
+        """Relleno del YAML o de la línea de comandos (None si no hay o si z es 0)."""
+        d = self.relleno_cfg or {}
+        if not d.get("z"):
+            return None
+        material = None
+        if any(d.get(c) is not None for c in ("k", "rho", "cp")):
+            material = Material(float(d.get("k") or self.suelo.k), float(d.get("rho") or self.suelo.rho),
+                                float(d.get("cp") or self.suelo.cp))
+        return Relleno(float(d["z"]), None if d.get("desde_h") is None else float(d["desde_h"]),
+                       None if d.get("T") is None else float(d["T"]), material)
 
     def materiales_vertida(self) -> dict:
         """{vertida: Material}: el hormigón base con lo que cambie cada vertida (p. ej. k mayor con grafito)."""
@@ -756,10 +1085,12 @@ def cargar_caso_3d(ruta) -> Caso3D:
         else float(crit["profundidad_superficie_m"]),
         superficie_tmin=str(crit.get("superficie_tmin", "todas")),
         fecha_inicio=None if fecha is None else str(fecha), clima_cfg=clima_cfg, superficie_cfg=superficie,
-        capas=capas, cubiertas_cfg={t: cfg[t] for t in ("moldaje", "aislacion") if cfg.get(t)},
+        capas=capas, cubiertas_cfg={t: cfg[t] for t in ("moldaje", "aislacion", "aislacion_terreno") if cfg.get(t)},
         suelo_cfg=dict(suelo),
         materiales_cfg=dict(mats["hormigon"].get("por_vertida") or {}),
         tubos_cfg=list(cfg.get("tubos") or []),
+        relleno_cfg=dict(cfg.get("relleno") or {}),
+        excavacion_cfg=dict(cfg.get("excavacion") or {}),
     )
 
 
@@ -773,7 +1104,9 @@ def preparar(caso: Caso3D, vertidas_ifc=None):
         raise ValueError(f"{caso.ifc} no tiene vertidas (Name = Vertida_01 ...)")
     vox = voxelizar(vertidas_ifc, caso.dx)
     registro = aplicar_cambios(vox, caso.cambios)
-    dom = construir_dominio(vox, caso.profundidad_suelo, caso.margen_suelo)
+    relleno = caso.relleno()
+    dom = construir_dominio(vox, caso.profundidad_suelo, caso.margen_suelo,
+                            relleno_z=relleno.z_m if relleno else None, excavacion=caso.excavacion())
     caso.cubiertas = armar_cubiertas(caso, vox)
     from .tubos import circuito_desde_dict
 
@@ -795,6 +1128,11 @@ def armar_cubiertas(caso: Caso3D, vox: Voxelizacion) -> PlanCubiertas:
             continue
         if nombre not in caso.capas:
             raise ValueError(f"{tipo}: la capa {nombre!r} no está en la sección `capas` del YAML")
+        if tipo == "aislacion_terreno":  # manta sobre el suelo alrededor de la fundación, desde t = 0
+            retiro = d.get("retiro_h")
+            cubiertas.append(Cubierta(tipo, caso.capas[nombre], (SUP,), (0,),
+                                      {0: np.inf if retiro in (None, "nunca") else float(retiro)}))
+            continue
         vertidas = tuple(int(v) for v in d.get("vertidas", range(1, vox.n_vertidas + 1)))
         retiro = d.get("retiro_h", "pset" if tipo == "moldaje" else None)
         if retiro == "pset":
@@ -850,5 +1188,6 @@ def simular_caso_3d(caso: Caso3D, vertidas_ifc=None, informar=None):
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
         informar=informar, cubiertas=caso.cubiertas, profundidad_tmin=caso.profundidad_tmin,
         superficie_tmin=caso.superficie_tmin, materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos,
+        relleno=caso.relleno(),
     )
     return res, registro

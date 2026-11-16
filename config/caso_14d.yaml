@@ -57,6 +57,7 @@ capas:
   terciado_18mm: {espesor: 0.018, k: 0.12, absortividad: 0.6, emisividad: 0.9}   # moldaje de terciado fenólico
   metalico_5mm:  {espesor: 0.005, k: 50.0, absortividad: 0.5, emisividad: 0.3}   # moldaje metálico (R ~ 0)
   manta_5cm:     {espesor: 0.05,  k: 0.04, absortividad: 0.4, emisividad: 0.9}   # manta de aislación
+  manta_10cm:    {espesor: 0.10,  k: 0.04, absortividad: 0.4, emisividad: 0.9}   # dos mantas (R = 2,5 m²K/W)
 
 # El pset del IFC trae Moldaje = "TBD" y Aislacion = "TBD": la decisión queda aquí, a la vista.
 moldaje:

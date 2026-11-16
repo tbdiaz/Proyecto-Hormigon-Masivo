@@ -55,6 +55,30 @@ def test_cambios_se_traducen_a_opciones_validas_del_cli(base):
     assert a.aislacion_caras == "todas" and a.retiro_aislacion == 300
 
 
+def test_relleno_se_traduce_al_cli(base):
+    f = _form(base)
+    assert base["relleno"]["usar"] is False and base["relleno"]["tope_m"] > 4
+    f["relleno"] = {"usar": True, "z": 1.1, "desde_h": 96, "T": "", "k": ""}
+    a = construir_parser().parse_args(["simular3d", "config/caso_14d.yaml", *construir_argumentos(f, base)])
+    assert (a.relleno, a.relleno_desde, a.relleno_T, a.relleno_k) == (1.1, 96, None, None)
+    f["relleno"]["z"] = base["relleno"]["tope_m"] + 10  # más de 3 m sobre la fundación
+    with pytest.raises(ValueError):
+        construir_argumentos(f, base)
+
+
+def test_excavacion_se_traduce_al_cli(base):
+    f = _form(base)
+    assert base["excavacion"]["usar"] is False and base["excavacion"]["categoria"] == "II"
+    f["excavacion"] = {"usar": True, "profundidad": 3.3, "sobreancho": 1.5, "factor_abrigo": 0.25,
+                       "categoria": "0", "perfil_viento": False}
+    a = construir_parser().parse_args(["simular3d", "config/caso_14d.yaml", *construir_argumentos(f, base)])
+    assert (a.excavacion, a.sobreancho, a.factor_abrigo, a.categoria_terreno, a.sin_perfil_viento) == \
+        (3.3, 1.5, 0.25, "0", True)
+    f["excavacion"]["categoria"] = "--vtk"
+    with pytest.raises(ValueError):
+        construir_argumentos(f, base)
+
+
 @pytest.mark.parametrize("cambio", [
     {"dx": 0.01}, {"dx": "abc"}, {"duracion_h": 0}, {"fecha_inicio": "ayer; rm -rf"},
     {"aislacion": {"capa": "--vtk", "caras": "todas"}},

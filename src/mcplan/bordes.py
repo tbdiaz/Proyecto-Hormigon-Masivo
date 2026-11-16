@@ -25,6 +25,7 @@ h_c; el sol sólo suma α G; la temperatura del aire entra en la convección y e
 la parte del cielo/suelo que ve la cara.
 """
 
+import math
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -113,17 +114,26 @@ class Ambiente:
             return self.clima.en(t_s / 3600.0)
         return self.temperatura(t_s), 0.0, 0.0, 0.0
 
-    def exterior(self, t_s, orientacion, absortividad, emisividad):
-        """(h_ext [W/m²K], T_eq [°C]) para cada categoría de cara (arreglos del mismo largo)."""
+    def exterior(self, t_s, orientacion, absortividad, emisividad, f_viento=None, f_cielo=None, f_sol=None):
+        """(h_ext [W/m²K], T_eq [°C]) para cada categoría de cara (arreglos del mismo largo).
+
+        f_viento, f_cielo, f_sol (opcionales, por categoría): factor sobre el viento a 10 m, fracción de cielo
+        que ve la cara y fracción del sol que recibe (excavación: ver simulacion3d.Excavacion). Sin ellos se
+        usa el viento a 10 m y F_CIELO / F_SOL según la orientación.
+        """
         orientacion = np.asarray(orientacion)
         if self.modelo == "combinado":
             h = np.where(orientacion == LAT, self.h_lateral, self.h_superior).astype(float)
             return h, np.full(h.shape, self.temperatura(t_s))
         T_a, v, G, c = self._meteo(t_s)
-        T_rad = F_CIELO[orientacion] * T_cielo(T_a, c) + (1 - F_CIELO[orientacion]) * T_a
-        h_c = np.full(orientacion.shape, float(h_conveccion(v)))
+        F_c = F_CIELO[orientacion] if f_cielo is None else np.asarray(f_cielo)
+        T_rad = F_c * T_cielo(T_a, c) + (1 - F_c) * T_a
+        if f_viento is None:
+            h_c = np.full(orientacion.shape, float(h_conveccion(v)))
+        else:
+            h_c = h_conveccion(v * np.asarray(f_viento, dtype=float))
         h_r = 4 * np.asarray(emisividad) * SIGMA * ((T_a + T_rad) / 2 + KELVIN) ** 3
-        q_sol = np.asarray(absortividad) * G * F_SOL[orientacion]
+        q_sol = np.asarray(absortividad) * G * (F_SOL[orientacion] if f_sol is None else np.asarray(f_sol))
         h = h_c + h_r
         return h, (h_c * T_a + h_r * T_rad + q_sol) / h
 
@@ -160,10 +170,10 @@ def coeficiente_U(h_ext, R, dx, k):
 class Cubierta:
     """Una capa (moldaje o aislación) sobre ciertas caras de ciertas vertidas, desde la colocación hasta el retiro."""
 
-    tipo: str  # "moldaje" o "aislacion"
+    tipo: str  # "moldaje", "aislacion" o "aislacion_terreno"
     capa: Capa
     orientaciones: tuple  # (LAT,) para moldaje; (SUP,) para una manta superior
-    vertidas: tuple  # vertidas cubiertas (1..n)
+    vertidas: tuple  # vertidas cubiertas (1..n); 0 = el terreno (caras superiores del suelo, desde t = 0)
     retiro_h: dict  # vertida -> horas desde su colocación hasta el retiro (inf = no se retira)
 
 
@@ -178,9 +188,10 @@ class PlanCubiertas:
         ev = []
         for c in self.cubiertas:
             for v in c.vertidas:
-                t = float(base[v - 1]) + float(c.retiro_h.get(v, np.inf))
+                t = (0.0 if v == 0 else float(base[v - 1])) + float(c.retiro_h.get(v, np.inf))
                 if np.isfinite(t):
-                    ev.append((t, f"retiro de {c.tipo} ({c.capa.nombre}) de la Vertida_{v:02d}"))
+                    donde = "del terreno" if v == 0 else f"de la Vertida_{v:02d}"
+                    ev.append((t, f"retiro de {c.tipo} ({c.capa.nombre}) {donde}"))
         return sorted(ev)
 
     def tabla(self, t_h, inicio_h, n_vertidas, base_retiro_h=None):
@@ -192,11 +203,12 @@ class PlanCubiertas:
         combos = [()]
         tabla = np.zeros((n_vertidas + 1, 3), dtype=np.int64)
         base = inicio_h if base_retiro_h is None else base_retiro_h
-        for v in range(1, n_vertidas + 1):
-            t0 = float(inicio_h[v - 1])
+        terreno = any(0 in c.vertidas for c in self.cubiertas)  # fila 0: el suelo, sólo si alguna capa lo cubre
+        for v in range(0 if terreno else 1, n_vertidas + 1):
+            t0 = 0.0 if v == 0 else float(inicio_h[v - 1])
             if not np.isfinite(t0) or t_h < t0 - 1e-9:
                 continue
-            tb = float(base[v - 1])
+            tb = 0.0 if v == 0 else float(base[v - 1])
             for o in (SUP, LAT, INF):
                 capas = tuple(c.capa for c in self.cubiertas if v in c.vertidas and o in c.orientaciones
                               and t_h < tb + float(c.retiro_h.get(v, np.inf)) - 1e-9)
@@ -209,9 +221,12 @@ class PlanCubiertas:
         lineas = []
         for c in self.cubiertas:
             caras = "/".join(NOMBRE_ORIENTACION[o] for o in c.orientaciones)
-            retiros = ", ".join(f"V{v}: {c.retiro_h.get(v, np.inf):g} h" for v in c.vertidas)
+            retiros = ", ".join(f"{'terreno' if v == 0 else f'V{v}'}: {c.retiro_h.get(v, np.inf):g} h"
+                                for v in c.vertidas)
+            donde = ("del terreno alrededor (toda la superficie del suelo del dominio)" if c.vertidas == (0,)
+                     else f"de las vertidas {list(c.vertidas)}")
             lineas.append(f"{c.tipo}: {c.capa.nombre} (e = {c.capa.espesor * 1000:g} mm, k = {c.capa.k:g} W/mK, "
-                          f"R = {c.capa.R:.3f} m²K/W) en caras {caras} de las vertidas {list(c.vertidas)}; "
+                          f"R = {c.capa.R:.3f} m²K/W) en caras {caras} {donde}; "
                           f"retiro desde la colocación: {retiros}")
         return lineas or ["sin moldaje ni aislación (todas las caras desnudas)"]
 
@@ -220,30 +235,40 @@ class PlanCubiertas:
 # Tabla de condiciones de borde (para la consola, el panel y los informes)
 # ---------------------------------------------------------------------------
 
-def _rango_h(amb: Ambiente, orientacion, absortividad, emisividad):
+def _rango_h(amb: Ambiente, orientacion, absortividad, emisividad, f_viento=None, f_cielo=None, f_sol=None):
     """h_ext y T_eq en todas las horas del clima (o en t = 0 si no hay clima)."""
     horas = amb.clima.t_h if amb.clima is not None else np.array([0.0])
     hs, Teq = [], []
+    extra = [None if f is None else np.array([f]) for f in (f_viento, f_cielo, f_sol)]
     for t in horas:
-        h, T = amb.exterior(t * 3600.0, np.array([orientacion]), np.array([absortividad]), np.array([emisividad]))
+        h, T = amb.exterior(t * 3600.0, np.array([orientacion]), np.array([absortividad]), np.array([emisividad]),
+                            *extra)
         hs.append(h[0])
         Teq.append(T[0])
     return np.array(hs), np.array(Teq)
 
 
-def filas_bordes(amb: Ambiente, cubiertas: PlanCubiertas, dx, k_hormigon, k_suelo, areas=None, inicio_h=None):
+def filas_bordes(amb: Ambiente, cubiertas: PlanCubiertas, dx, k_hormigon, k_suelo, areas=None, inicio_h=None,
+                 excavacion=None, cota=0.0):
     """Una fila por tipo de superficie: tipo, h, R de capa, β = h/k, U con media celda, T_eq y área.
 
     β = h'/k [1/m], con h' = 1/(1/h_ext + R_capa) el coeficiente entre la superficie del
     hormigón y el ambiente. Neumann adiabático: β = 0; Dirichlet: β = ∞.
+    excavacion (simulacion3d.Excavacion) y cota: el viento de las filas generales se lleva a la altura de
+    la obra (bajo z_min) y se agrega una fila para las caras laterales dentro del hoyo, a media profundidad.
     """
     areas = areas or {}
     filas = []
+    fisico = amb.modelo == "fisico"
+    f_general = float(excavacion.factor_altura(0.0)) if excavacion is not None and fisico else None
 
-    def robin(nombre, clave, orientacion, k, capa=None, nota=""):
+    def robin(nombre, clave, orientacion, k, capa=None, nota="", f_viento=None, f_cielo=None):
         alfa = capa.absortividad if capa else amb.absortividad
         eps = capa.emisividad if capa else amb.emisividad
-        h, Teq = _rango_h(amb, orientacion, alfa, eps)
+        f_v = f_general if f_viento is None else f_viento
+        h, Teq = _rango_h(amb, orientacion, alfa, eps, f_v, f_cielo, None if f_cielo is None else 0.0)
+        if f_v is not None and f_viento is None and f_v != 1.0:
+            nota = f"{nota}; viento × {f_v:.2f} (EN 1991-1-4)" if nota else f"viento × {f_v:.2f} (EN 1991-1-4)"
         R = capa.R if capa else 0.0
         h_sup = 1.0 / (1.0 / h + R)
         U = coeficiente_U(h, R, dx, k)
@@ -269,6 +294,13 @@ def filas_bordes(amb: Ambiente, cubiertas: PlanCubiertas, dx, k_hormigon, k_suel
               nota=f"vertidas {list(c.vertidas)} hasta el desmolde")
     robin("Hormigón: caras laterales desnudas", "lat", LAT, k_hormigon,
           nota="troncos (cara inclinada) y tras el desmolde")
+    if excavacion is not None and fisico and cota > 0:
+        d, W = cota / 2, excavacion.sobreancho_m
+        f_c = 0.5 * (1 - d / math.hypot(d, W))
+        f_v = float(excavacion.factor_altura(0.0)) * excavacion.factor_abrigo
+        robin("Hormigón: caras laterales en el hoyo", "hoyo", LAT, k_hormigon, f_viento=f_v, f_cielo=f_c,
+              nota=f"a {d:.2f} m bajo el terreno y {W:g} m de la pared: viento × {f_v:.2f}, cielo {f_c:.2f}; "
+                   "hasta el relleno")
     robin("Suelo: superficie al aire (z = 0)", "suelo_sup", SUP, k_suelo, nota=sol)
     filas.append({"superficie": "Suelo: fondo", "tipo": "Dirichlet", "capa": "—", "R": 0.0, "h": None, "beta": None,
                   "h_ef": [2 * k_suelo / dx] * 3, "k": k_suelo, "T_eq": [amb.T_fondo] * 3,

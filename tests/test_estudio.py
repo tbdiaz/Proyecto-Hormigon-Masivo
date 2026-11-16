@@ -118,6 +118,19 @@ def test_decision_elige_el_mas_rapido_que_cumple():
     assert not next(r for r in incompleto if r["plan"] == "medio")["cumple"]  # sin todas las corridas no hay decisión
 
 
+def test_empate_en_D_se_decide_por_margen():
+    """Varios planes con la misma D mínima que cumplen: se propone el de más margen al límite en su peor escenario,
+    y las variantes más rápida y más lenta son las de D estrictamente menor y mayor."""
+    planes = [PlanObra(n, [Etapa((1,))]) for n in ("justo", "holgado", "lento")]
+    esc = _esc(planes)
+    esc["cronos"] = {"justo": {"D_h": 10.0}, "holgado": {"D_h": 10.0}, "lento": {"D_h": 30.0}}
+    filas = [{"plan": p, "curva": c, "clima": k, "I_T": 0, "I_D": 0, "I_F": 0, "M_T": 50, "M_D": md,
+              "pico_al_final": 0, "residuo_energia": 0}
+             for p, md in (("justo", 19.8), ("holgado", 18.2), ("lento", 12.0)) for c in ("A", "B") for k in ("k1", "k2")]
+    d = decision(agregar(filas, esc))
+    assert d == {"propuesto": "holgado", "mas_rapido": None, "mas_lento": "lento"}
+
+
 def test_historias_reducidas_y_pesos():
     from mcplan.bordes import Clima
     from mcplan.clima import reducir_historias

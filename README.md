@@ -46,8 +46,8 @@ llama directo a `.venv\Scripts\mcplan`. Los comandos se corren desde la raíz de
 mcplan clima ensemble                          # ensemble ECMWF (51 miembros) como snapshot nuevo
 mcplan estudio --solo-preparar                 # curvas, historias climáticas, cronogramas y sus figuras
 mcplan estudio                                 # planes x 8 curvas x 3 historias, en paralelo; retoma lo que falte
-mcplan estudio --detalle 5V-e24 M4_22A fría    # una corrida con cortes, vista 3D y VTK
-mcplan estudio --sensibilidad 5V-e24 M4_22A fría   # malla, paso de tiempo y profundidad de Tmin
+mcplan estudio --detalle 5V-e24 M4_SS fría    # una corrida con cortes, vista 3D y VTK
+mcplan estudio --sensibilidad 5V-e24 M4_SS fría   # malla, paso de tiempo y profundidad de Tmin
 ```
 
 Todo se configura en [`config/estudio.yaml`](config/estudio.yaml) y los resultados quedan en `resultados/estudio/`:
@@ -63,8 +63,8 @@ y cada corrida queda en `resultados/editor/`. No modifica los YAML ni el IFC.
 ## Uso rápido
 
 ```powershell
-pytest                                            # 160 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
-pytest -m "not lento"                             # la batería rápida (156 tests, ~1 min)
+pytest                                            # 174 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
+pytest -m "not lento"                             # la batería rápida (170 tests, ~1 min)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
 mcplan fuente --dim 3                             # fuente uniforme en dominio adiabático + balance de energía
@@ -240,7 +240,7 @@ tests/               tests automatizados (pytest)
 data/clima/          snapshots meteorológicos (JSON tal como llegan de Open-Meteo + metadata) e índice
 docs/                modelo 1D, solver 2D/3D (E05), dossier (E06), vertidas (E07), pipeline 3D (E08), línea base (E09),
                      ambiente y clima (E10/E11), simulación de 14 días (E12), decisión (E13/F02)
-data/hidratacion/    las 8 curvas de hidratación entregadas por el profesor (source_terms.txt, sin modificar)
+data/hidratacion/    las 8 curvas de hidratación del profesor (source_terms.txt, versión corregida del 14 nov 2026, sin modificar)
 ```
 
 ## Arquitectura
@@ -272,7 +272,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 160 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 174 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |
@@ -282,9 +282,13 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Clima real: Open-Meteo (ECMWF IFS + ERA5), snapshots inmutables, horizonte completado con climatología | ✅ `clima.py`, `data/clima/` |
 | Exportación VTK y vista PyVista (slice, clipping, núcleo y superficie) | ✅ `vtk_io.py` |
 | Simulación determinista de 14 días (E12) | ✅ [docs/simulacion_14d.md](docs/simulacion_14d.md) |
-| Decisión probabilística: 8 curvas x 3 historias (ensemble), P_f conjunta, familia de planes | ✅ `mcplan estudio` |
+| Decisión probabilística: 8 curvas x 3 historias (ensemble), P_f conjunta, familia de planes | ✅ `mcplan estudio` (resultados pendientes con las curvas corregidas) |
 | HPC | no se usa: enumeración ponderada en paralelo en el computador local |
 | Tubos de enfriamiento (PVC/HDPE/acero/cobre) y hormigón distinto por vertida | ✅ [docs/tubos.md](docs/tubos.md), editor y estudio |
+| Enterrar la fundación (relleno de tierra, parcial o total) | ✅ [docs/relleno.md](docs/relleno.md), editor y panel |
+| Fundación en un hoyo: menos viento (EN 1991-1-4 + abrigo) y menos cielo bajo el terreno | ✅ [docs/excavacion.md](docs/excavacion.md), editor y panel |
+| Manta sobre el terreno alrededor de la fundación | ✅ `aislacion_terreno` en el YAML; `--aislacion-terreno` |
+| Datos por confirmar antes de la defensa | 📋 [docs/pendientes.md](docs/pendientes.md) |
 
 ## Supuestos vigentes
 
@@ -306,6 +310,12 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 - Ju, Y. y Lei, H. (2019). *Actual Temperature Evolution of Thick Raft Concrete Foundations and
   Cracking Risk Analysis*. Advances in Materials Science and Engineering, 7029671.
   https://doi.org/10.1155/2019/7029671
+- Chen, C., Liu, X., Liu, Z., Shao, L., Chang, H., Liu, Q., Miao, C. y Feng, P. (2024). *Developing
+  heat-conductive concrete with graphite-modified recycled aggregates*. Composites Part B 284, 111721.
+  https://doi.org/10.1016/j.compositesb.2024.111721 (k del hormigón con grafito, ver `docs/tubos.md`)
+- CEN (2005). EN 1991-1-4, *Eurocode 1 — Wind actions* (perfil del viento, tabla 4.1), y Nakamura, Y. y
+  Oke, T. R. (1988), *Atmospheric Environment* 22(12), 2691–2700 (viento en una calle encajonada): ver
+  `docs/excavacion.md`
 - ICH (2019). *Especificación para Hormigón Masivo Estructural*.
 - Guías del curso G00–G08, *Difusión de calor 1D/2D/3D* y *Modelar la fundación en Blender + Bonsai*.
 - IfcOpenShell: https://docs.ifcopenshell.org/ · Bonsai: https://docs.bonsaibim.org/

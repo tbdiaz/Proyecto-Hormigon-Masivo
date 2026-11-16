@@ -71,7 +71,7 @@ materiales:
   hormigon:
     ...
     por_vertida:                  # sólo en el caso; en un plan del estudio va como `materiales: {3: {k: 4.0}}`
-      Vertida_03: {k: 4.0}        # hormigón con grafito [SUPUESTO: respaldar con ficha técnica]
+      Vertida_03: {k: 4.0}        # hormigón con árido recubierto de grafito [Chen et al. 2024: 4,11 W/mK, sección 3]
 
 tubos:
   - nombre: serpentin_V3
@@ -104,10 +104,40 @@ El recorrido se valida: si un tramo sale del hormigón, la corrida se detiene co
   - Con plástico, la pared del tubo pesa en la resistencia total; el modelo lo cuantifica.
   - Lo que más importa es la **separación entre tubos** (cuánto hormigón enfría cada metro) y que el agua no esté
     demasiado fría (el ΔT hormigón–agua).
-- **Grafito:** subir k ayuda a que el calor llegue a los tubos y reduce el gradiente interno. Tres reparos:
-  - **Sin datos:** no tenemos la curva de hidratación ni la resistencia de ese hormigón. El grafito puede cambiar
-    ambas, y el modelo usa la misma curva para todos.
-  - **k sin respaldo:** el valor de k debe venir de una ficha técnica o un ensayo. Mientras no exista, es un
-    supuesto con sensibilidad.
-  - **Uso estructural:** en una fundación de aerogenerador su uso no es habitual. Hay que justificarlo frente a la
-    resistencia y la durabilidad.
+- **Grafito:** subir k ayuda a que el calor llegue a los tubos y reduce el gradiente interno.
+
+### Respaldo: Chen et al. (2024)
+
+Recubren árido grueso reciclado con una mezcla 1:1 de grafito y cemento (su "método B", 80 kg de grafito por m³).
+
+| Dato | Valor | Fuente en el paper |
+|---|---|---|
+| k del hormigón sin grafito (RB) | 2,16 ± 0,08 W/mK | Tabla 4, 28 días |
+| k con grafito suelto en el mortero (RG, 96 kg/m³) | 3,14 ± 0,04 W/mK | Tabla 4 |
+| k con árido recubierto (RA11B, 80 kg/m³) | **4,11 ± 0,04 W/mK (1,9 veces)** | Tabla 4, conclusión 2 |
+| Resistencia a compresión / tracción por hendimiento | −1,7 % / −2,3 % | Tabla 5 |
+| Costo | ≈ +10 % por m³ (precios de China) | sección 4.3 |
+
+- **Qué respalda:** aplicada a nuestro k base (2,222 W/mK [JL19]), la razón 1,9 da ≈ 4,2 W/mK. El k = 4,0 de los
+  planes "TG" queda un poco por debajo, del lado conservador.
+- **Resistencia:** el método importa. Con el árido recubierto la resistencia casi no cambia; con grafito suelto en
+  la mezcla, otros autores que ellos citan informan caídas de hasta 90 %.
+
+**Reparos que siguen en pie:**
+- **k en seco:** midieron cubos de 100 mm secados a 60 °C, a 25 °C. El hormigón en obra está húmedo, así que la
+  razón 1,9 se traslada mejor que el valor absoluto. Además k sube un poco con la edad: a los 3 días es algo menor
+  que a los 28.
+- **Mezcla de laboratorio:** razón a/c 0,6, 500 kg/m³ de cemento y árido de 5–16 mm. No es una mezcla de hormigón
+  masivo. El árido se recubre y se cura 7 días antes de usarlo, lo que exige planificar la logística para todo el
+  volumen de la fundación.
+- **Calor de hidratación:** no lo midieron. Citan que el grafito puede retardar la hidratación, y el modelo usa la
+  misma curva en todas las vertidas.
+- **Durabilidad:** no la ensayaron. La esperan aceptable porque el grafito es inerte, pero advierten que el grafito
+  suelto aumenta la porosidad abierta.
+- **ρ y c_p:** no los informan; se mantienen los de [JL19].
+- **Uso estructural:** en una fundación de aerogenerador no es habitual. Con este paper el argumento de resistencia
+  queda respaldado en laboratorio; falta la durabilidad.
+
+Chen, C., Liu, X., Liu, Z., Shao, L., Chang, H., Liu, Q., Miao, C. y Feng, P. (2024). *Developing heat-conductive
+concrete with graphite-modified recycled aggregates*. Composites Part B 284, 111721.
+https://doi.org/10.1016/j.compositesb.2024.111721

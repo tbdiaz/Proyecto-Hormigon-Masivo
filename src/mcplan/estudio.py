@@ -194,9 +194,13 @@ def simular_tarea(tarea: dict, instantes_3d_h=()):
     return res, crono
 
 
-def _pico_al_final(res) -> bool:
-    n = len(res.t_h)
-    return bool(int(np.nanargmax(res.Tmax)) >= n - 2 or int(np.nanargmax(res.dT)) >= n - 2)
+def _pico_al_final(res, ventana_h: float = 24.0) -> bool:
+    """¿El máximo de Tmax o de ΔT cae en el último día? (Con el ciclo diario, un ΔT que sigue subiendo marca su
+    máximo de madrugada, unas horas antes del final; mirar sólo las últimas 2 h lo dejaba pasar.)"""
+    t = np.asarray(res.t_h)
+    ultimo = t >= t[-1] - ventana_h
+    return any(np.isfinite(s).any() and np.nanmax(s[ultimo]) >= np.nanmax(s) - 1e-9
+               for s in (np.asarray(res.Tmax), np.asarray(res.dT)))
 
 
 def _firma_plan(plan) -> str:
@@ -363,15 +367,26 @@ def agregar(filas, esc, firma=None, pesos_curva=None, pesos_clima=None) -> list[
     return salida
 
 
+def _uso_del_limite(r) -> float:
+    """Peor escenario como fracción del límite: max(M_T/70, M_Δ/20). Menos es más margen."""
+    return max(r["M_T_max"] / LIMITE_T, r["M_D_max"] / LIMITE_D)
+
+
 def decision(resumen) -> dict:
-    """Propuesto = menor D que cumple; más rápido = el de D inmediatamente menor; más lento = inmediatamente mayor."""
+    """Propuesto = menor D que cumple; más rápido = el de D inmediatamente menor; más lento = inmediatamente mayor.
+
+    Si varios planes que cumplen tienen la misma D mínima (p. ej. vertida única con distintas protecciones), se
+    propone el de menor P_f y, a igual P_f, el de más margen al límite en su peor escenario (el que mejor resiste el
+    error de malla y de modelo).
+    """
     por_D = sorted(resumen, key=lambda r: r["D_h"])
     factibles = [r for r in por_D if r["cumple"]]
     if not factibles:
         # Sin planes factibles: el de menor P_f; si empatan (p. ej. todos al 100 %), el de menor M_T y M_Δ.
         return {"propuesto": None, "mas_rapido": por_D[0]["plan"],
                 "menor_riesgo": min(por_D, key=lambda r: (r["P_f"], r["M_T_max"], r["M_D_max"], r["D_h"]))["plan"]}
-    p = factibles[0]
-    i = por_D.index(p)
-    return {"propuesto": p["plan"], "mas_rapido": por_D[i - 1]["plan"] if i > 0 else None,
-            "mas_lento": next((r["plan"] for r in por_D[i + 1:]), None)}
+    D_min = factibles[0]["D_h"]
+    p = min((r for r in factibles if abs(r["D_h"] - D_min) < 1e-9), key=lambda r: (r["P_f"], _uso_del_limite(r)))
+    antes = [r for r in por_D if r["D_h"] < D_min - 1e-9]
+    return {"propuesto": p["plan"], "mas_rapido": antes[-1]["plan"] if antes else None,
+            "mas_lento": next((r["plan"] for r in por_D if r["D_h"] > D_min + 1e-9), None)}

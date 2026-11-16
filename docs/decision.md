@@ -7,9 +7,9 @@ $P_f = P(\{M_T > 70\,°C\} \cup \{M_\Delta > 20\,°C\}) \le 5\,\%$, bajo un mode
 
 ```powershell
 mcplan estudio --solo-preparar      # curvas, historias, cronogramas
-mcplan estudio                      # 11 planes x 8 curvas x 3 historias = 264 corridas (~55 min, 7 procesos)
-mcplan estudio --sensibilidad unica M4_22A fría --dx-variantes 0.275 0.11
-mcplan estudio --detalle unica M4_22A fría
+mcplan estudio                      # 14 planes x 8 curvas x 3 historias = 336 corridas (~50 min, 7 procesos)
+mcplan estudio --sensibilidad unica-M10-T10-N25 M4_SS media --dx-variantes 0.275 0.11   # confirmación (~7 min)
+mcplan estudio --detalle unica-M10-T10-N25 M4_SS media                                   # cortes, vista 3D, VTK
 ```
 
 Resultados: `resultados/estudio/` → `escenarios.csv` (una fila por plan y escenario), `resumen.md`,
@@ -25,11 +25,13 @@ Resultados: `resultados/estudio/` → `escenarios.csv` (una fila por plan y esce
   - una bomba y una cuadrilla, así que las etapas van en serie y sin simultaneidad;
   - tasa de colocación $r$ = **27 m³/h** [supuesto: Ju y Lei vaciaron una fundación igual en ~24 h];
   - duración física de cada etapa $d_j = V_j/r$, con $V_j$ del IFC: el volumen total (637 m³) toma 23,6 h de bomba.
-- **Controles en la familia evaluada:**
+- **Controles en la familia evaluada** (sección 6):
   - partición (cómo se agrupan o dividen las vertidas del IFC) y esperas entre etapas;
-  - T de colocación de 18 °C;
-  - moldaje de terciado en V1, V2 y V5, retirado 72 h después de terminar cada vertida (pset `RetiroMoldaje_h`);
-  - sin aislación.
+  - T de colocación de 18 °C (guía del curso), o 10 u 8 °C con hormigón preenfriado;
+  - moldaje de terciado en V1, V2 y V5, retirado 72 h después de terminar cada vertida (pset `RetiroMoldaje_h`) o,
+    con protección, junto con la manta;
+  - manta de aislación de 5 o 10 cm en todas las caras expuestas;
+  - tubos de enfriamiento HDPE con agua tibia, en todas las vertidas o sólo en el núcleo.
 - **Colocación por capas.** Ninguna etapa aparece de golpe: sube de abajo hacia arriba a la tasa $r$, y cada capa
   de celdas entra a su T de colocación y con edad 0. Así se respeta la duración física de cada vertida en el
   cronograma y en la física.
@@ -41,18 +43,26 @@ Resultados: `resultados/estudio/` → `escenarios.csv` (una fila por plan y esce
 | Insumo | Fuente | Archivo |
 |---|---|---|
 | Geometría | IFC oficial del curso (Bonsai), 5 vertidas, voxelizado (error de volumen +0,38 % con dx = 0,275 m; +0,06 % con 0,11 m) | `geometry/foundation.ifc` |
-| Hidratación | 8 curvas Q(t) [W/m³] entregadas por el profesor | `data/hidratacion/source_terms.txt` (sin modificar) |
+| Hidratación | 8 curvas Q(t) [W/m³] entregadas por el profesor, versión corregida del 14 nov 2026 | `data/hidratacion/source_terms.txt` (sin modificar) |
 | Clima | Open-Meteo Ensemble API, ECMWF IFS 0,25° ENS (control + 50 miembros), Litueche (−34,105457; −71,649539), punto de grilla (−34,0; −71,75; 337 m), hora local America/Santiago; °C, m/s, W/m², % | `data/clima/snapshots/ensemble_ecmwf_ifs025_20261112T2348Z.json` |
 | Continuación del clima y suelo | ERA5 del 12 nov al 24 dic, años 2016–2025 | `data/clima/snapshots/era5_1119_2016-2025_20261112T2348Z.json` |
 | Propiedades térmicas | Ju y Lei (2019), Tabla 2: hormigón k = 2,222 W/mK, ρ = 2400 kg/m³, c_p = 970 J/kgK; suelo 1,389 / 1800 / 1273 | `config/caso_14d.yaml` |
 
 ### 2.1 Las ocho curvas
 
-Según el encabezado del archivo, las curvas son:
-- **Probetas y campañas:** fuente volumétrica $Q(t)$ de cilindros de hormigón (r = 3,75 cm, h = 15 cm),
-  probetas M1–M4 en dos campañas (SS: 13–20 abr 2025, 240,5 h; 22A: 22 abr 2025, 163,1 h).
-- **Origen:** recuperadas con una PINN a la conductancia β de menor RMSE de cada probeta (7–15 W/m²K).
-- **Origen del tiempo:** t = 0 es el inicio del registro + 2 h.
+Las primeras curvas que entregó el profesor estaban malas: liberaban 193–402 MJ/m³, el equivalente a 83–173 °C
+adiabáticos. Se retiraron el 14 nov 2026 junto con todos los resultados calculados con ellas; quedan en el
+historial de git (commit `85516d7`). Este documento usa la versión corregida.
+
+Según el encabezado del archivo nuevo, las curvas son:
+- **Probetas y campañas:** fuente volumétrica $Q(t)$ de cilindros de hormigón (r = 3,75 cm, h = 15 cm,
+  ρ = 2476 kg/m³, c_p = 1023 J/kgK, 350,77 kg/m³ de cemento), probetas M1–M4 en dos campañas (SS: 13–20 abr
+  2025, 240,3 h; 22A: 22 abr 2025, 163,0 h).
+- **Método:** inversión por volúmenes finitos con regularización de Tikhonov (axisimétrica, fuente en B-splines
+  cúbicas), con una conductancia de borde β = 2,5 W/m²K común a todas las probetas.
+- **Confianza:** el profesor marca la campaña 22A como de menor confianza, porque su único sensor de ambiente no
+  reproduce la respuesta de las probetas al ciclo diario.
+- **Origen del tiempo:** t = 0 es el inicio del registro + 2 h; paso de 10 min.
 
 Ya son una fuente $\dot q_h$ en W/m³, así que no se deriva una curva adiabática ni se hace el balance del ensayo.
 
@@ -69,26 +79,29 @@ Ya son una fuente $\dot q_h$ en W/m³, así que no se deriva una curva adiabáti
 - **Escenarios:** cada escenario usa **una curva completa** para todas las vertidas, es decir, una variación común
   del material.
 
-**¿Son réplicas comparables?**
-- **El índice M no ordena las curvas igual en las dos campañas:**
-  - por energía, SS va M3 > M1 > M2 > M4, y 22A va M2 > M1 > M3 > M4;
-  - por pico, SS va M3 > M2 > M4 > M1, y 22A va M1 > M2 > M3 > M4.
-  - Esto es compatible con probetas de una misma mezcla, no con cuatro recetas distintas.
-- **Las campañas sí difieren sistemáticamente en la cola:**
-  - en SS, la fuente sigue en 24–72 W/m³ a las 240 h;
-  - en 22A cae a ~0 cerca de las 72 h, con un escalón brusco que parece un artefacto del ensayo o de la PINN.
-- **Hipótesis declarada:** 8 escenarios de material **equiprobables** ($p_m = 1/8$), con sensibilidad a usar
-  sólo una campaña.
+**Calor de cada curva.** La energía calculada coincide con la tabla del encabezado.
 
-**Comprobación del calor total.**
-- La energía liberada a 14 días va de **193 a 402 MJ/m³**.
-- Con ρc_p = 2,33 MJ/m³K, eso equivale a un **aumento adiabático de 83 a 173 °C**. La curva de Ju y Lei da 60 °C
-  (140 MJ/m³), y un hormigón con ~400 kg/m³ de cemento libera típicamente 120–170 MJ/m³.
-- Con estas curvas, cualquier núcleo grueso supera 70 °C aunque se coloque a 5 °C, y el modelo llega a
-  temperaturas sobre 100 °C, que no son físicas en hormigón.
-- **Hipótesis de origen:** $Q$ sale de la PINN aproximadamente proporcional a la β estimada, así que un β
-  sobreestimado infla la fuente.
-- **Consulta prioritaria 1** (sección 9).
+| Curva | Pico [W/m³] | Edad del pico [h] | Energía del registro [MJ/m³] | Aumento adiabático a 14 d [°C] (ρc_p del modelo, 2,33) | Ídem con ρc_p de la probeta (2,53) |
+|---|---|---|---|---|---|
+| M1_SS | 468 | 15,8 | 88,1 | 37,9 | 34,8 |
+| M2_SS | 531 | 15,3 | 95,7 | 41,1 | 37,8 |
+| M3_SS | 553 | 14,3 | 94,1 | 40,4 | 37,2 |
+| M4_SS | 569 | 14,5 | 100,2 | 43,0 | 39,5 |
+| M1_22A | 473 | 19,3 | 61,2 | 26,3 | 24,2 |
+| M2_22A | 625 | 19,3 | 82,4 | 35,5 | 32,6 |
+| M3_22A | 590 | 19,3 | 73,3 | 31,5 | 29,0 |
+| M4_22A | 596 | 19,2 | 73,6 | 31,7 | 29,1 |
+
+- **Rango:** 61–100 MJ/m³, entre 251 y 286 J/g de cemento en SS. Equivale a 26–43 °C adiabáticos, menos que
+  la curva de Ju y Lei (140 MJ/m³, 60 °C).
+- **Las campañas difieren en la cola.** Las curvas SS siguen liberando calor hasta ~200 h. Las 22A caen a cero
+  cerca de las 85 h, lo que es coherente con la menor confianza que les asigna el profesor.
+- **ρc_p:** el modelo usa ρc_p = 2,33 MJ/m³K (Ju y Lei); el de las probetas es 2,53. Con el del modelo, el
+  aumento adiabático sale ~9 % mayor, del lado conservador.
+- **Hipótesis declarada:** 8 escenarios de material **equiprobables** ($p_m = 1/8$), con sensibilidad a usar
+  sólo una campaña. Dada la menor confianza en 22A, la sensibilidad "sólo SS" es la referencia natural.
+- **Sensibilidad a β:** el encabezado trae la energía con β = 2,1 y 3,0 W/m²K: ×0,84 y ×1,20 respecto de
+  β = 2,5. Se puede correr con `escala` en `curvas.py`.
 
 ### 2.2 Historias climáticas
 
@@ -172,124 +185,196 @@ $$w_{mk} = p_m\,q_k,\qquad P_f(u) = \sum_{m,k} w_{mk}\,\mathbf 1[F(u,m,k)],\qqua
 
 ## 6. Familia de planes y búsqueda
 
-| Familia | Partición | Esperas evaluadas | D [h] |
-|---|---|---|---|
-| Vertida única | todo el volumen continuo (= cualquier plan sin esperas) | — | 23,6 |
-| 5V | las 5 vertidas del IFC | 12, 24, 48, 72 h | 71,6 – 311,6 |
-| 8C | 8 capas de ≤ 0,55 m (V3, V4 y V5 partidas en dos) | 24, 48 h | 191,6 – 359,6 |
-| Con protecciones (P) | única y 8C-e48, a 10 °C, manta de 5 cm en todas las caras y moldaje 14 días | — / 48 h | 23,6 / 359,6 |
+Con las curvas corregidas, Tmax cumple sin protección y el problema es el ΔT (sección 7). Por eso la familia
+recorre **niveles de protección** de la vertida única, que es la más rápida posible con una bomba, y agrega como
+variante más lenta las 5 vertidas del IFC con protección.
 
-La resolución de la búsqueda es de esperas de 12–24 h. Como ningún plan cumple, no se afirma un óptimo.
+| Plan | Partición | T colocación | Manta en todas las caras | Tubos (HDPE, agua 14 d) | D [h] |
+|---|---|---|---|---|---|
+| unica | continua | 18 °C | no (moldaje 72 h) | no | 23,6 |
+| unica-M10 | continua | 18 °C | 10 cm | no | 23,6 |
+| unica-M10-T10 | continua | 10 °C | 10 cm | no | 23,6 |
+| unica-M10-A25 | continua | 18 °C | 10 cm | V1–V5, 25 °C, cada 1 m | 23,6 |
+| unica-M5-T10-A25 | continua | 10 °C | 5 cm | V1–V5, 25 °C, cada 1 m | 23,6 |
+| unica-M10-T10-A25 | continua | 10 °C | 10 cm | V1–V5, 25 °C, cada 1 m | 23,6 |
+| unica-M10-T8-A25 | continua | 8 °C | 10 cm | V1–V5, 25 °C, cada 1 m | 23,6 |
+| unica-M10-T10-A25-S75 | continua | 10 °C | 10 cm | V1–V5, 25 °C, cada 0,75 m | 23,6 |
+| unica-M10-T8-A25-S75 | continua | 8 °C | 10 cm | V1–V5, 25 °C, cada 0,75 m | 23,6 |
+| **unica-M10-T10-N25** | continua | 10 °C | 10 cm | **sólo V3–V5, 25 °C**, cada 1 m | 23,6 |
+| unica-M10-T10-N20 | continua | 10 °C | 10 cm | sólo V3–V5, 20 °C, cada 1 m | 23,6 |
+| unica-M10-T8-N20 | continua | 8 °C | 10 cm | sólo V3–V5, 20 °C, cada 1 m | 23,6 |
+| 5V-M10-T10-A25-e12 | 5 vertidas del IFC | 10 °C | 10 cm | V1–V5, 25 °C, cada 1 m | 71,6 |
+| 5V-M10-T10-A25-e24 | 5 vertidas del IFC | 10 °C | 10 cm | V1–V5, 25 °C, cada 1 m | 119,6 |
+
+- **Variables de decisión y rangos:**
+  - partición: continua o 5 vertidas;
+  - espera: 12 o 24 h;
+  - T de colocación: 8, 10 o 18 °C;
+  - manta: 5 o 10 cm;
+  - tubos: no, en V1–V5 o sólo en el núcleo (V3–V5), con agua a 20 o 25 °C y filas cada 0,75 o 1 m.
+- **Manta:** cubre todas las caras expuestas, junto con el moldaje, y se retira a las 600 h, después del horizonte
+  de evaluación. Su retiro se planifica aparte (pendientes, punto 9).
+- **Tubos:** un serpentín HDPE por vertida, a media altura, con 20 L/min durante 14 días desde el inicio de su
+  vertida.
+- **Orden de la búsqueda:**
+  1. Los primeros 8 planes se fijaron antes de ver resultados.
+  2. Las variantes T8, S75 y N se agregaron después, cuando la malla fina mostró que `unica-M10-T10-A25` no tenía
+     margen.
+  3. Los escenarios y los pesos no cambiaron en ningún momento.
+- **Familia anterior** (5V con esperas de 12–72 h, 8C y tubos con agua a 10 °C): se armó para las curvas
+  retiradas, cuyo problema era Tmax. Queda en `config/estudio.yaml` (`planes_anteriores`) y en el historial de
+  git.
+
+La resolución de la búsqueda es de esperas de 12 h. Con D = 23,6 h, la vertida única es el límite inferior con
+una bomba: si un plan de vertida única cumple, no hay uno más rápido. Entre planes de igual D que cumplen, se
+propone el de más margen en su peor escenario, porque es el que mejor resiste el error de malla y de modelo.
 
 ![Cronogramas](img/decision_cronogramas.png)
 
 ## 7. Resultados
 
-Corridas del 12 y 14 nov con el ensemble descargado el 12 (dx = 0,275 m): 11 planes × 24 escenarios = 264
-corridas, unos 70 s cada una con 7 procesos.
+Corrida del 14 nov 2026 con las curvas corregidas y el ensemble del 12 nov (dx = 0,275 m): 14 planes × 24
+escenarios = 336 corridas, ~60 s cada una con 7 procesos. Residuo de energía por corrida ≤ 4e−15.
 
-| Plan | D [h] | P_T [%] | P_Δ [%] | P_f conjunta [%] | M_T [°C] (mín–máx) | M_Δ [°C] (mín–máx) | ¿Cumple? |
+| Plan | D [h] | P_T [%] | P_Δ [%] | P_f [%] | M_Δ [°C] (mín–máx) | M_T máx [°C] | ¿Cumple? |
 |---|---|---|---|---|---|---|---|
-| Vertida única | 23,6 | 100 | 100 | 100 | 100,7 – 172,1 | 83,4 – 156,7 | no |
-| Única + protecciones (10 °C, manta en todo, moldaje 14 d) | 23,6 | 100 | 100 | 100 | 93,2 – 172,8 | 53,0 – 152,1 | no |
-| 5V, espera 12 h | 71,6 | 100 | 100 | 100 | 102,8 – 172,5 | 85,3 – 157,3 | no |
-| 5V, espera 24 h | 119,6 | 100 | 100 | 100 | 101,5 – 168,5 | 84,4 – 153,5 | no |
-| 8C, espera 24 h | 191,6 | 100 | 100 | 100 | 97,2 – 163,1 | 84,4 – 148,6 | no |
-| 5V, espera 48 h | 215,6 | 100 | 100 | 100 | 95,0 – 154,9 | 82,4 – 140,6 | no |
-| 5V, espera 72 h | 311,6 | 100 | 100 | 100 | 88,4 – 141,3 | 75,8 – 126,8 | no |
-| 8C, espera 48 h | 359,6 | 100 | 100 | 100 | **75,9 – 135,2** | **62,7 – 121,5** | no |
-| 8C + protecciones, espera 48 h | 359,6 | 100 | 100 | 100 | 101,0 – 171,6 | 85,6 – 153,7 | no |
-| Única + tubos HDPE (agua 10 °C, 14 d) | 23,6 | 100 | 100 | 100 | 90,9 – 133,9 | 74,8 – 116,4 | no |
-| Única + tubos de cobre + grafito k = 4 | 23,6 | 100 | 100 | 100 | **80,9 – 114,7** | **66,1 – 99,7** | no |
+| Vertida única sin protección | 23,6 | 0 | 100 | 100 | 30,9 – 46,8 | 59,9 | no |
+| Única + manta 10 cm | 23,6 | 0 | 87,5 | 87,5 | 17,7 – 28,4 | 60,7 | no |
+| Única + manta 10 cm + 10 °C | 23,6 | 0 | 37,5 | 37,5 | 12,5 – 23,3 | 52,9 | no |
+| Única + manta 10 cm + tubos V1–V5 (18 °C) | 23,6 | 0 | 62,5 | 62,5 | 14,5 – 24,6 | 55,1 | no |
+| Única + manta 5 cm + 10 °C + tubos V1–V5 | 23,6 | 0 | 12,5 | 12,5 | 15,3 – 20,2 | 48,6 | no |
+| Única + manta 10 cm + 10 °C + tubos V1–V5 | 23,6 | 0 | 0 | 0 | 15,6 – 19,8 | 49,1 | sí, sin margen |
+| Ídem a 8 °C | 23,6 | 0 | 0 | 0 | 16,7 – 19,4 | 47,6 | sí, sin margen |
+| Ídem con tubos cada 0,75 m | 23,6 | 0 | 0 | 0 | 15,8 – 19,7 | 48,3 | sí, sin margen |
+| Ídem a 8 °C con tubos cada 0,75 m | 23,6 | 0 | 0 | 0 | 17,0 – 19,7 | 46,9 | sí, sin margen |
+| **Única + manta 10 cm + 10 °C + tubos sólo en V3–V5 a 25 °C (propuesta)** | **23,6** | **0** | **0** | **0** | **12,3 – 18,2** | **49,2** | **sí** |
+| Ídem con agua a 20 °C | 23,6 | 0 | 29,2 | 29,2 | 12,3 – 21,7 | 48,9 | no |
+| Ídem con agua a 20 °C y colocación a 8 °C | 23,6 | 0 | 12,5 | 12,5 | 12,7 – 20,4 | 47,3 | no |
+| 5 vertidas, espera 12 h, manta + 10 °C + tubos V1–V5 | 71,6 | 0 | 100 | 100 | 24,2 – 31,3 | 50,2 | no |
+| 5 vertidas, espera 24 h, ídem | 119,6 | 0 | 100 | 100 | 27,3 – 37,3 | 50,9 | no |
 
-**No se encontró ningún plan factible.** Las 264 corridas exceden ambos límites, así que
-$P_T = P_\Delta = P_f = 100\,\%$ en todos los planes. La sensibilidad a los pesos (sólo SS, sólo 22A, historia fría
-con peso 0,5, historias equiprobables) no cambia nada.
+### Plan propuesto: `unica-M10-T10-N25`
+
+**Vertida única** (colocación continua de los 637 m³ a 27 m³/h, D = 23,6 h desde el jueves 19 nov, 08:00), con:
+- hormigón **colocado a 10 °C** (preenfriado);
+- **manta de 10 cm en todas las caras expuestas**, junto con el moldaje, hasta después del horizonte de
+  evaluación;
+- **tubos HDPE sólo en el núcleo (V3, V4 y V5)**: un serpentín a media altura de cada una, filas cada 1 m,
+  20 L/min, **agua a 25 °C**, 14 días.
+
+Resultados:
+- **Cumple en los 24 escenarios:** $P_T = P_\Delta = P_f = 0\,\%$. Su peor escenario (M4_SS, clima medio) llega a
+  M_Δ = 18,2 °C y M_T = 49,1 °C.
+- **Es el más rápido posible con una bomba**, así que no existe una variante más rápida que comparar.
+- **La sensibilidad a los pesos no lo cambia:** sólo SS, sólo 22A, historia fría con peso 0,5 e historias
+  equiprobables dan $P_f$ = 0 %.
+- **Tubos:** ΔT hormigón–agua máximo de 14,5 °C, bajo el orden de 20 °C que se limita en obra.
+- **Dónde y cuándo:** el punto frío del peor escenario está bajo la cara del tronco V4 (z ≈ 3,0 m), a las 139 h.
+  El ΔT del día 14 ya va bajando: no hay un pico tardío escondido.
+
+**Confirmación con malla fina** (`mcplan estudio --sensibilidad unica-M10-T10-N25 M4_SS media`):
+
+| dx [m] | Δt [s] | profundidad de Tmin | M_T [°C] | M_Δ [°C] | residuo de energía |
+|---|---|---|---|---|---|
+| 0,275 | 600 | 25 mm | 49,10 | 18,18 | 1,2e−16 |
+| **0,110** | 600 | 25 mm | 49,35 | **18,33** | 1,8e−15 |
+| 0,275 | **300** | 25 mm | 49,09 | 18,17 | 2,0e−15 |
+| 0,275 | 600 | **50 mm** | 49,10 | 18,07 | 1,2e−16 |
+
+Con la malla fina, el peor escenario sube sólo 0,15 °C y queda a 1,7 °C del límite. **La propuesta se confirma
+en la resolución final.**
+
+**Variante más lenta:** 5 vertidas con esperas de 12 o 24 h. No cumplen ni con la protección completa
+($P_f$ = 100 %): mientras se espera, las primeras vertidas se enfrían hacia el suelo, y las siguientes se calientan
+encima de ellas. Esperar alarga D y empeora el ΔT.
+
+### Qué hace cada medida
+
+Se lee comparando las filas de la tabla.
+- **La manta sola no basta.** Retiene el calor de la superficie, pero el núcleo llega a 61 °C.
+- **Colocar a 10 °C baja el núcleo ~8 °C,** pero deja 3 de 8 curvas sobre el límite.
+- **Los tubos en V1–V5 dejan el ΔT justo en el límite.** Bajan el núcleo, pero sus serpentines pasan bajo el
+  anillo exterior de la losa (V1+V2, 1,1 m de espesor), que ya es la zona más fría.
+  - El ΔT queda en 19,4–19,8 °C aunque se coloque a 8 °C o se acerquen los tubos.
+  - Con malla fina pasa de 20 °C: `unica-M10-T10-A25` sube de 19,78 a 20,63 °C en su peor escenario, bajo el
+    escalón de V2 (z ≈ 1,08 m).
+- **Los tubos sólo en el núcleo resuelven eso.** Enfrían donde está el calor (V3–V5) sin tocar el anillo, y el
+  margen sube a 1,8 °C.
+- **El agua debe ir tibia (25 °C).** Con 20 °C enfría de más el hormigón junto a los troncos y el ΔT empeora.
+- **Tmax nunca es el problema:** M_T queda entre 35 y 61 °C en todos los planes.
 
 ![D vs P_f](img/decision_D_vs_Pf.png)
 
 ![Escenarios](img/decision_escenarios.png)
 
-**Qué controla el resultado:**
-- **La energía de la curva.** Los puntos de cada plan forman 8 grupos, uno por curva. El clima casi no los separa:
-  las 3 historias quedan superpuestas.
-- **Esperar ayuda poco:**
-  - capas delgadas (≤ 0,55 m) con 48 h de espera bajan el M_T más bajo de 101 a 76 °C, pero D sube de 23,6 a
-    360 h;
-  - aun así, la curva más energética deja el núcleo en 135 °C.
-- **Proteger empeora M_T con estas fuentes:** la manta y el moldaje retienen el calor.
-  - M_Δ baja al inicio (mínimo 53 °C contra 83 °C de la vertida única).
-  - Al retirar la manta, después de los 14 días, aparece un nuevo máximo de M_Δ. Por eso se informan los dos
-    horizontes (`M_T_14d`, `M_D_14d` en `escenarios.csv`).
-- **Ubicación de los máximos:**
-  - M_T ocurre en el centro de la masa (eje, z ≈ 2 m), entre 4 y 7 días después del inicio.
-  - M_Δ ocurre de madrugada, con Tmin a 25 mm bajo el escalón horizontal al pie del tronco, en el borde del
-    octágono.
+![Núcleo y superficie de la propuesta](img/decision_nucleo_propuesta.png)
 
-![Núcleo y superficie, 8C-e48](img/decision_nucleo_8C-e48.png)
+![Corte de la propuesta, peor escenario](img/decision_cortes_propuesta.png)
 
-![Corte, vertida única](img/decision_cortes_unica.png)
+### Limitaciones
 
-**Sensibilidad numérica** (`mcplan estudio --sensibilidad unica M4_22A fría`):
+- **Planes con manta y sin tubos.** El ΔT seguía subiendo al final de los 14 días. El detector de picos tardíos de
+  esa corrida miraba sólo las últimas 2 h, así que esas corridas no se extendieron, y su M_Δ es una cota inferior.
+  Como ya no cumplen, la clasificación no cambia. El detector se corrigió para mirar el último día.
+- **Retiro de la manta.** La manta y el moldaje se retiran a las 600 h, después del horizonte de evaluación. El
+  núcleo sigue a ~35 °C a los 14 días, así que el retiro debe ser gradual (pendientes, punto 9).
+- **Escenario confirmado con malla fina:** sólo el peor de la propuesta. El resto tiene más margen en la malla de
+  exploración.
+- **Controles a confirmar con el profesor:** hormigón preenfriado, mantas por más de tres semanas y tubos con agua
+  tibia (pendientes, punto 10).
 
-| dx [m] | Δt [s] | profundidad de Tmin | M_T [°C] | M_Δ [°C] | residuo de energía |
-|---|---|---|---|---|---|
-| 0,275 | 600 | 25 mm | 100,80 | 83,69 | 1,2e−16 |
-| **0,110** | 600 | 25 mm | 100,66 | 85,05 | 7,4e−16 |
-| 0,275 | **300** | 25 mm | 100,79 | 83,68 | 2,5e−16 |
-| 0,275 | 600 | **50 mm** | 100,80 | 82,52 | 1,2e−16 |
+### Primera comprobación con las curvas corregidas
 
-- **Malla (0,275 → 0,110 m):** M_T cambia 0,14 °C y M_Δ 1,4 °C.
-- **Paso de tiempo:** cambia < 0,02 °C.
-- **Profundidad de Tmin (25 → 50 mm):** M_Δ cambia 1,2 °C.
-- **Clasificación:** ninguno de estos errores la cambia, porque los márgenes son de 30 a 150 °C. Con 0,11 m se
-  resuelve que dx/2 = 55 mm > 25 mm, y la interpolación lineal en la media celda es la aproximación declarada.
+Caso de 14 días (`config/caso_14d.yaml`), no el plan del estudio: 5 vertidas cada 6 h desde el 27 nov, moldaje en
+V1, V2 y V5, sin aislación, dx = 0,275 m, 336 h.
 
-**Tubos de enfriamiento** ([docs/tubos.md](tubos.md)):
-- **Son la medida que más ayuda:** con cobre y hormigón con grafito, M_T baja 19–61 °C según la curva y M_Δ
-  16–64 °C. El agua extrae 93–167 GJ, más de la mitad del calor generado.
-- **No alcanzan con estas curvas:** con la curva más baja, M_T sigue en 81 °C.
-- **Generan un problema propio:** el ΔT hormigón–agua llega a 47–66 °C, muy por encima de lo que se acepta en obra.
-  Con estas fuentes, el agua a 10 °C sería un choque térmico alrededor del tubo.
+| Curva | Tmax [°C] | ΔT máx [°C] |
+|---|---|---|
+| M4_SS (la de más calor) | 59,5 (a las 167 h) | 46,5 (a las 190 h) |
+| M1_22A (la de menos calor) | 44,7 (a las 89 h) | 31,3 (a las 142 h) |
 
-**Qué habría que cambiar.** Con estas curvas no basta con esperar ni con proteger. Habría que estudiar:
-- **la fuente:** confirmar la energía de las curvas (consulta 1);
-- **el calor de la mezcla:** menos cemento o cemento de bajo calor;
-- **la temperatura de colocación:** bajarla con hielo o agua fría;
-- **el enfriamiento interno:** tuberías.
+Fue lo que mostró que el problema había cambiado: con las curvas anteriores había que bajar Tmax; con las
+corregidas hay que proteger la superficie.
 
-Ninguna de estas medidas está simulada. No se declaran validadas.
+**Otras medidas que el modelo permite evaluar:**
+- **Relleno temprano** ([docs/relleno.md](relleno.md)). Con relleno frío, el ΔT empeora.
+- **Excavación**, que da menos viento y menos cielo bajo el terreno ([docs/excavacion.md](excavacion.md)).
+- **Manta sobre el terreno** (`aislacion_terreno`). Casi no cambia el resultado, porque el frío viene del suelo bajo
+  la losa.
+- **Hormigón con grafito**, con un k más alto respaldado por Chen et al. (2024): 4,11 W/mK, con −1,7 % de
+  resistencia a compresión ([docs/tubos.md](tubos.md), sección 3).
 
 ## 8. Qué llevar al taller E13 y a la defensa
 
 | Pedido | Dónde está |
 |---|---|
 | Repositorio ejecutable y commit identificado | README (instalación); el SHA se declara en Canvas |
-| Geometría/IFC, voxelización y corrida completa en una sola vertida | `mcplan voxelizar`; `mcplan estudio --detalle unica M4_22A fría` (cortes, vista 3D, VTK) |
+| Geometría/IFC, voxelización y corrida completa en una sola vertida | `mcplan voxelizar`; `mcplan estudio --detalle unica-M10-T10-N25 M4_SS media` (cortes, vista 3D, VTK) |
 | Las 8 curvas, archivos originales, unidades y antecedentes | `data/hidratacion/source_terms.txt` (encabezado con unidades, β y campañas); `curvas_hidratacion.png`; sección 2.1 |
 | Clima descargado: archivo, fuente, modelo, sitio, fechas, zona horaria, unidades, cobertura | `mcplan clima listar`; `mcplan clima info data/clima/snapshots/ensemble_...json`; `definicion.json` |
 | Propuesta de vertidas, parámetros, bordes y resultados preliminares | `config/estudio.yaml`, `config/caso_14d.yaml`, `resultados/estudio/resumen.md` |
-| Evidencia de verificación | `pytest` (160 tests); balance de energía por corrida; sensibilidad de malla, Δt y profundidad (sección 7) |
+| Evidencia de verificación | `pytest` (174 tests); balance de energía por corrida; sensibilidad de malla, Δt y profundidad (sección 7) |
 | Una fila por plan y escenario con pesos, M_T, M_Δ, I_T, I_Δ, I_F, instante y ubicación | `resultados/estudio/escenarios.csv` |
 | Tabla P_T, P_Δ, P_f y "¿cumple?" por plan; D vs P_f; cronogramas | `resumen.md`, `resumen_planes.csv`, `D_vs_Pf.png`, `cronogramas.png` |
 | Curvas núcleo/superficie, corte con instante y escala de colores | `nucleo_superficie_<plan>.png`; `detalle_*/cortes_y0.png`, `vista_3d.png` |
 | Sensibilidad a los pesos | `resumen.md`: sólo una campaña, historia fría con peso 0,5, historias equiprobables |
 
-**Antes de la defensa (17–18 nov):**
+**Antes de la defensa (jueves 19 nov 2026, 10:30–12:30):**
 1. `mcplan clima ensemble`, para que el ensemble cubra hasta ~2 dic.
 2. `mcplan estudio`, con el clima congelado en ese snapshot.
 3. Declarar el SHA.
 
+La lista de datos por confirmar está en [docs/pendientes.md](pendientes.md).
+
 ## 9. Consultas prioritarias para el taller E13
 
-1. **Energía de las curvas.** Las 8 curvas liberan 193–402 MJ/m³ a 14 días, lo que equivale a 83–173 °C
-   adiabáticos con ρc_p = 2,33 MJ/m³K. Con ellas ningún plan baja de 70 °C y el núcleo pasa de 100 °C.
-   - ¿Son W/m³ de hormigón como el de la fundación?
-   - ¿Qué ρc_p y qué β tenía cada probeta?
-   - ¿Hay que reescalarlas a la dosificación de la obra?
-2. **Significado de M1–M4 y SS/22A.** ¿Son 4 probetas de una misma mezcla (réplicas) o 4 mezclas? Si son mezclas,
-   la mezcla es una decisión y sólo quedan 2 réplicas por mezcla. ¿Qué pasó cerca de las 72 h en la campaña 22A,
-   donde la fuente cae a cero?
+1. **Energía de las curvas: respondida.** El profesor confirmó que las primeras estaban malas y entregó la versión
+   corregida (61–100 MJ/m³, sección 2.1).
+2. **Uso de las curvas corregidas.**
+   - ¿El modelo debe usar el ρc_p de las probetas (2476 kg/m³ y 1023 J/kgK) o el de Ju y Lei?
+   - ¿Hay que reescalar las curvas a la dosificación de la obra? Las probetas tienen 351 kg/m³ de cemento.
+   - Dada la menor confianza en 22A, ¿se usan las 8 curvas con el mismo peso o solo las SS?
+   - ¿M1–M4 son réplicas de una misma mezcla o mezclas distintas?
 3. **Recursos y controles admitidos.**
    - ¿Hay una tasa de colocación o una capacidad de planta definida por el curso? (supuesta: 27 m³/h)
    - ¿Se admiten enfriamiento con hielo o agua fría, aislación completa o tuberías de enfriamiento como

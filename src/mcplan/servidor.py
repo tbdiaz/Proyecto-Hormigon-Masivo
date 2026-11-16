@@ -44,7 +44,7 @@ def casos_disponibles(raiz: Path) -> list[str]:
 def opciones_caso(raiz: Path, nombre: str) -> dict:
     """Valores actuales de un caso: lo que el formulario muestra y contra lo que se comparan los cambios."""
     from .ifc_io import leer_vertidas
-    from .simulacion3d import aplicar_cambios, cargar_caso_3d
+    from .simulacion3d import CATEGORIAS_TERRENO, aplicar_cambios, cargar_caso_3d
 
     if nombre not in casos_disponibles(raiz):
         raise ValueError(f"Caso desconocido: {nombre}")
@@ -69,6 +69,19 @@ def opciones_caso(raiz: Path, nombre: str) -> dict:
     sup = caso.superficie_cfg
     amb = caso.ambiente
     modelo = sup.get("modelo", "fisico") if con_clima else "combinado"
+    relleno = excavacion = None
+    if caso.profundidad_suelo > 0:  # el relleno y la excavación se apoyan en el suelo del dominio
+        rc = caso.relleno_cfg or {}
+        valor = lambda c: None if rc.get(c) is None else float(rc[c])  # noqa: E731
+        tope = max(float(v.vertices[:, 2].max()) for v in vertidas)
+        relleno = {"usar": bool(rc.get("z")), "z": valor("z"), "desde_h": valor("desde_h"), "T": valor("T"),
+                   "k": valor("k"), "tope_m": tope}
+        e = caso.excavacion()
+        excavacion = {"usar": e is not None, "profundidad": e.profundidad_m if e else None,
+                      "sobreancho": e.sobreancho_m if e else 1.0,
+                      "factor_abrigo": round(e.factor_abrigo if e else 2 / 3, 2),
+                      "categoria": e.categoria if e else "II", "perfil_viento": e.perfil_viento if e else True,
+                      "categorias": list(CATEGORIAS_TERRENO), "tope_m": tope}
     return {
         "caso": nombre, "nombre": caso.nombre, "dx": caso.dx, "duracion_h": caso.duracion_h, "dt_max_s": caso.dt_max_s,
         "fecha_inicio": caso.fecha_inicio if con_clima else None, "con_clima": con_clima, "modelo": modelo,
@@ -86,7 +99,8 @@ def opciones_caso(raiz: Path, nombre: str) -> dict:
                               "T_agua": 15.0, "dias": 7.0},
                   "materiales": ["hdpe", "pvc", "acero", "cobre"]},
         "curvas": _curvas_disponibles(raiz, caso), "curva": "ju_lei_2019",
-        "moldaje": moldaje, "aislacion": aislacion, "capas": sorted(caso.capas),
+        "moldaje": moldaje, "aislacion": aislacion, "capas": sorted(caso.capas), "relleno": relleno,
+        "excavacion": excavacion,
         "cobertura": _cobertura(caso) if con_clima else None,
     }
 
@@ -252,6 +266,42 @@ def construir_argumentos(form: dict, base: dict) -> list[str]:
                 retiro = _numero(a, "retiro_h", 0, 2000, "Retiro de la aislación")
                 if _distinto(retiro, ba["retiro_h"]):
                     args.extend(["--retiro-aislacion", f"{retiro:g}"])
+    if base.get("relleno") is not None:
+        r, br = form.get("relleno") or {}, base["relleno"]
+        if br["usar"] and not r.get("usar"):
+            args.append("--sin-relleno")
+        elif r.get("usar"):
+            z = _numero(r, "z", 0.05, br["tope_m"] + 3.0, "Relleno: altura sobre el terreno")
+            if not br["usar"] or _distinto(z, br["z"]):
+                args.extend(["--relleno", f"{z:g}"])
+            for clave, bandera, minimo, maximo, etiqueta in (
+                    ("desde_h", "--relleno-desde", 0, 720, "Relleno: hora de colocación"),
+                    ("T", "--relleno-T", -5, 45, "Relleno: temperatura"),
+                    ("k", "--relleno-k", 0.1, 10, "Relleno: k")):
+                if r.get(clave) not in (None, ""):
+                    x = _numero(r, clave, minimo, maximo, etiqueta)
+                    if _distinto(x, br[clave]):
+                        args.extend([bandera, f"{x:g}"])
+    if base.get("excavacion") is not None:
+        e, be = form.get("excavacion") or {}, base["excavacion"]
+        if be["usar"] and not e.get("usar"):
+            args.append("--sin-excavacion")
+        elif e.get("usar"):
+            prof = _numero(e, "profundidad", 0, be["tope_m"] + 3.0, "Excavación: profundidad del terreno")
+            if not be["usar"] or _distinto(prof, be["profundidad"]):
+                args.extend(["--excavacion", f"{prof:g}"])
+            for clave, bandera, minimo, maximo, etiqueta in (
+                    ("sobreancho", "--sobreancho", 0.3, 5, "Excavación: sobreancho"),
+                    ("factor_abrigo", "--factor-abrigo", 0, 1, "Excavación: factor de abrigo")):
+                x = _numero(e, clave, minimo, maximo, etiqueta)
+                if _distinto(x, be[clave]):
+                    args.extend([bandera, f"{x:g}"])
+            if e.get("categoria") not in be["categorias"]:
+                raise ValueError("Excavación: categoría de terreno inválida")
+            if e["categoria"] != be["categoria"]:
+                args.extend(["--categoria-terreno", e["categoria"]])
+            if be["perfil_viento"] and not e.get("perfil_viento"):
+                args.append("--sin-perfil-viento")
     return args
 
 

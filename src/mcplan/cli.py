@@ -603,6 +603,28 @@ def cmd_simular3d(args):
         caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "caras": args.aislacion_caras}
     if args.retiro_aislacion is not None and "aislacion" in caso.cubiertas_cfg:
         caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "retiro_h": args.retiro_aislacion}
+    if args.aislacion_terreno:
+        if args.aislacion_terreno == "ninguna":
+            caso.cubiertas_cfg.pop("aislacion_terreno", None)
+        else:
+            caso.cubiertas_cfg["aislacion_terreno"] = {"capa": args.aislacion_terreno,
+                                                       "retiro_h": args.retiro_aislacion_terreno}
+    if args.sin_relleno:
+        caso.relleno_cfg = {}
+    for clave, valor in (("z", args.relleno), ("desde_h", args.relleno_desde), ("T", args.relleno_T),
+                         ("k", args.relleno_k)):
+        if valor is not None:
+            caso.relleno_cfg[clave] = valor
+    if args.sin_excavacion:
+        caso.excavacion_cfg = {}
+    for clave, valor in (("profundidad", args.excavacion), ("sobreancho", args.sobreancho),
+                         ("factor_abrigo", args.factor_abrigo), ("categoria_terreno", args.categoria_terreno)):
+        if valor is not None:
+            caso.excavacion_cfg[clave] = valor
+    if args.sin_perfil_viento:
+        caso.excavacion_cfg["perfil_viento"] = False
+    if caso.excavacion_cfg and caso.excavacion_cfg.get("profundidad") is None:
+        raise ValueError("Excavación: indica la profundidad del terreno natural sobre la base (--excavacion M)")
 
     t0 = time.perf_counter()
     vertidas = leer_vertidas(caso.ifc)
@@ -629,7 +651,10 @@ def cmd_simular3d(args):
           f"{100 * vox.error_volumen_total:+7.2f}%")
     print(f"    Dominio con suelo ({caso.profundidad_suelo:g} m de profundidad, {caso.margen_suelo:g} m de margen) y aire: "
           f"{dom.forma[0]} x {dom.forma[1]} x {dom.forma[2]} = {int(np.prod(dom.forma)):,} celdas "
-          f"({np.count_nonzero(dom.material == HORMIGON):,} hormigón, {np.count_nonzero(dom.material == SUELO):,} suelo)")
+          f"({np.count_nonzero(dom.material == HORMIGON):,} hormigón, {np.count_nonzero(dom.material == SUELO):,} suelo"
+          + (f", de las cuales {np.count_nonzero(dom.relleno):,} son relleno" if dom.relleno is not None else "")
+          + (f", {np.count_nonzero(dom.natural):,} suelo natural alrededor del hoyo" if dom.natural is not None else "")
+          + ")")
 
     print("\n[3] Secuencia constructiva (input: pset del IFC" + (" + cambios del YAML/CLI" if registro else "") + "):")
     for r in registro:
@@ -662,6 +687,11 @@ def cmd_simular3d(args):
             su = m["suelo"]
             print(f"      suelo (ERA5): T inicial {su['T_capas_C']} °C a {su['profundidades_m']} m; fondo {su['T_fondo_C']} °C")
     print(f"    superficie: {amb.describir()}")
+    if dom.excavacion is not None:
+        print(f"    excavación: {dom.excavacion.describir(dom.cota_terreno)}")
+        if amb.modelo != "fisico":
+            print("    AVISO: la excavación sólo cambia el viento, el cielo y el sol con el modelo de superficie 'fisico'; "
+                  "aquí sólo agrega el suelo natural alrededor del hoyo")
     for v, m in caso.materiales_vertida().items():
         print(f"    hormigón de la Vertida_{v:02d}: k = {m.k:g} W/mK, ρ = {m.rho:g} kg/m³, c_p = {m.cp:g} J/kgK")
     for c in caso.tubos:
@@ -671,9 +701,20 @@ def cmd_simular3d(args):
               f"{c.durante_h:g} h desde el inicio de la Vertida_{c.vertida or 0:02d}")
     for linea in caso.cubiertas.describir(plan.inicio_h):
         print(f"    {linea}")
+    relleno = caso.relleno()
+    if relleno is not None:
+        from .simulacion3d import Activacion, Relleno
+
+        info = relleno.resolver(dom, caso.cubiertas, Activacion.desde_plan(dom, plan), amb)
+        print(f"    {Relleno.describir(info, caso.suelo)}")
+        if info["t_h"] > caso.duracion_h:
+            print(f"    AVISO: el relleno se coloca después del horizonte simulado ({caso.duracion_h:g} h): no entra")
+        for aviso in info["avisos"]:
+            print(f"    AVISO: {aviso}")
     print(f"    {'superficie':<44} {'tipo':<9} {'h [W/m²K]':>17} {'β = h/k [1/m]':>17} {'U [W/m²K]':>17}")
     rango = lambda x: "—" if x is None else (f"{x[0]:.1f}" if abs(x[2] - x[0]) < 0.05 else f"{x[0]:.1f}–{x[2]:.1f}")  # noqa: E731
-    filas = filas_bordes(amb, caso.cubiertas, caso.dx, caso.hormigon.k, caso.suelo.k)
+    filas = filas_bordes(amb, caso.cubiertas, caso.dx, caso.hormigon.k, caso.suelo.k,
+                         excavacion=dom.excavacion, cota=dom.cota_terreno)
     for f in filas:
         beta = "∞" if f["tipo"] == "Dirichlet" else rango(f["beta"])
         print(f"    {f['superficie']:<44} {f['tipo']:<9} {rango(f['h']):>17} {beta:>17} {rango(f['h_ef']):>17}")
@@ -702,7 +743,7 @@ def cmd_simular3d(args):
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
         informar=lambda m: print("    " + m), observador=observar, cubiertas=caso.cubiertas,
         profundidad_tmin=caso.profundidad_tmin, superficie_tmin=caso.superficie_tmin,
-        materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos,
+        materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos, relleno=relleno,
     )
     t_calculo = time.perf_counter() - t1
     print(f"    ({t_calculo:.1f} s de cálculo, dt = {res.dts[-1][1]:.0f} s)")
@@ -772,6 +813,9 @@ def cmd_simular3d(args):
                                else None) for k, n in enumerate(vox.nombres)},
         "dt_s": [{"desde_h": a, "dt_s": b, "dt_critico_s": float(c)} for a, b, c in res.dts],
         "celdas": int(np.prod(dom.forma)), "tiempo_calculo_s": t_calculo,
+        "relleno": res.relleno,
+        "excavacion": ({**caso.excavacion_cfg, "cota_real_m": dom.cota_terreno,
+                        "descripcion": dom.excavacion.describir(dom.cota_terreno)} if dom.excavacion else None),
     }
     (salida / "resumen.json").write_text(json.dumps(resumen, indent=2, ensure_ascii=False), encoding="utf-8")
     archivos = ["serie.csv", "resumen.json"]
@@ -1058,8 +1102,9 @@ def cmd_estudio(args):
     dec = es.decision(resumen)
     sens = {}
     pc = esc["p_curva"]
-    for camp in ("SS", "22A"):
-        sub = [n for n in pc if n.endswith("_" + camp)]
+    campanas = sorted({n.partition("_")[2] for n in pc} - {""})  # nombres PROBETA_CAMPAÑA
+    for camp in campanas if len(campanas) > 1 else []:
+        sub = [n for n in pc if n.partition("_")[2] == camp]
         if sub and len(sub) < len(pc):
             sens[f"sólo campaña {camp}"] = es.agregar(filas, esc, pesos_curva={n: 1 / len(sub) for n in sub})
     claves = [h["clave"] for h in esc["historias"]]
@@ -1268,6 +1313,9 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--aislacion", metavar="CAPA", help="capa del YAML sobre las caras superiores (o 'ninguna')")
     s.add_argument("--retiro-aislacion", type=float, metavar="H", help="retiro de la aislación H horas después")
     s.add_argument("--aislacion-caras", choices=("superiores", "laterales", "todas"), help="dónde va la aislación")
+    s.add_argument("--aislacion-terreno", metavar="CAPA",
+                   help="capa del YAML sobre el suelo alrededor de la fundación, desde t = 0 (o 'ninguna')")
+    s.add_argument("--retiro-aislacion-terreno", type=float, metavar="H", help="retiro de esa capa a las H horas")
     s.add_argument("--k-hormigon", type=float, help="conductividad del hormigón [W/mK]")
     s.add_argument("--k-suelo", type=float, help="conductividad del suelo [W/mK]")
     s.add_argument("--h-superior", type=float, help="h de las caras ±z [W/m²K] (modelo combinado)")
@@ -1285,8 +1333,29 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--tubo", action="append", nargs="+", metavar="CLAVE=VALOR",
                    help="un circuito: vertida=3 z=1.65 direccion=x separacion=1 material=cobre diametro=32 caudal=20 "
                         "T_agua=10 dias=7 (se puede repetir)")
-    s.add_argument("--curva", help="hidratación con una curva medida (p. ej. M4_22A) en vez de la del caso")
+    s.add_argument("--curva", help="hidratación con una curva medida (un nombre del archivo de curvas) en vez de la "
+                                   "del caso")
     s.add_argument("--curvas-archivo", default="data/hidratacion/source_terms.txt")
+    s.add_argument("--relleno", type=float, metavar="Z",
+                   help="entierra la fundación con relleno de tierra hasta z = Z m sobre el terreno (más alto que la "
+                        "cara superior = enterrada entera)")
+    s.add_argument("--relleno-desde", type=float, metavar="H",
+                   help="hora de colocación del relleno (por defecto, al colocar y descubrir las vertidas que toca)")
+    s.add_argument("--relleno-T", dest="relleno_T", type=float, metavar="T",
+                   help="temperatura del relleno al colocarlo [°C] (por defecto, la media del aire en las 24 h previas)")
+    s.add_argument("--relleno-k", type=float, metavar="K", help="k del relleno [W/mK] (por defecto, el del suelo)")
+    s.add_argument("--sin-relleno", action="store_true", help="ignora el relleno del YAML")
+    s.add_argument("--excavacion", type=float, metavar="M",
+                   help="la fundación está en un hoyo: terreno natural a M metros sobre la base (menos viento y "
+                        "cielo bajo el terreno hasta el relleno)")
+    s.add_argument("--sobreancho", type=float, metavar="M", help="del borde de la base a la pared del hoyo [m] (1)")
+    s.add_argument("--factor-abrigo", type=float, metavar="F",
+                   help="viento dentro del hoyo / viento a nivel del terreno (0,67: Nakamura y Oke 1988)")
+    s.add_argument("--categoria-terreno", choices=("0", "I", "II", "III", "IV"),
+                   help="categoría de terreno EN 1991-1-4 para el perfil del viento (II)")
+    s.add_argument("--sin-perfil-viento", action="store_true",
+                   help="con excavación, no llevar el viento de 10 m a la altura de las caras")
+    s.add_argument("--sin-excavacion", action="store_true", help="ignora la excavación del YAML")
     s.set_defaults(func=cmd_simular3d)
 
     s = sub.add_parser("clima", help="Clima real: snapshots de Open-Meteo (pronóstico y ERA5) y serie para los bordes")

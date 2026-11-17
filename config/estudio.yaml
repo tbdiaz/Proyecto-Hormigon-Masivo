@@ -147,6 +147,33 @@ planes:
     etapas: [[1, 2, 3, 4, 5]]
     cubiertas: *m10
     tubos: *n20
+  # Umbral de la temperatura de colocación (16 nov): la propuesta con hormigón más tibio, para fijar la T máxima
+  # de colocación del Plan de Control de Temperatura (camiones sobre ese valor se rechazan o se enfrían), y más
+  # frío (8 °C), que es a lo que apunta la planta para cumplir el máximo con holgura.
+  - nombre: unica-M10-T8-N25
+    descripcion: la propuesta con colocación a 8 °C
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *n25
+  - nombre: unica-M10-T12-N25
+    descripcion: la propuesta con colocación a 12 °C
+    T_colocacion: 12
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *n25
+  - nombre: unica-M10-T14-N25
+    descripcion: la propuesta con colocación a 14 °C
+    T_colocacion: 14
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *n25
+  - nombre: unica-M10-T16-N25
+    descripcion: la propuesta con colocación a 16 °C
+    T_colocacion: 16
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *m10
+    tubos: *n25
 
 # Familia anterior (curvas retiradas): vertida única, 5V con esperas de 12-72 h, 8C con 24-48 h, protecciones a
 # 10 °C con manta de 5 cm, y tubos HDPE/cobre con agua a 10 °C. Queda en el historial de git (commit f15175f).

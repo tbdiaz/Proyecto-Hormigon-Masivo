@@ -763,7 +763,7 @@ function contenido() {
   if (D.retiros.length) amb.append(el("p", {}, el("b", {}, "Retiros y relleno: "), D.retiros.map(r => `${fmt(r.t, 0)} h: ${r.evento}`).join("; ")));
   if (A.clima) {
     const C = A.clima, lista = [`desde ${A.fecha_inicio} (hora local ${C.zona_horaria})`,
-      `${C.horas_pronostico} h de pronóstico, ${C.horas_transicion} h de transición, ${C.horas_climatologia} h de climatología`];
+      `${C.horas_pasado || 0} h de clima ya ocurrido, ${C.horas_pronostico} h de pronóstico, ${C.horas_transicion} h de transición, ${C.horas_climatologia} h de climatología`];
     if (C.pronostico) lista.push(`pronóstico ${C.pronostico.archivo} (${C.pronostico.modelo}, descargado ${C.pronostico.descargado_utc}, cubre ${C.pronostico.horizonte.join(" .. ")})`);
     if (C.climatologia) lista.push(`climatología ${C.climatologia.archivo} (ERA5 ${C.climatologia.anios[0]}–${C.climatologia.anios.at(-1)}, ±${C.climatologia.ventana_dias} días)`);
     if (C.suelo) lista.push(`suelo ERA5: ${C.suelo.T_capas_C.map(x => fmt(x)).join(" / ")} °C a ${C.suelo.profundidades_m.map(x => fmt(x, 2)).join(" / ")} m; fondo ${fmt(C.suelo.T_fondo_C)} °C`);

@@ -54,6 +54,22 @@ Todo se configura en [`config/estudio.yaml`](config/estudio.yaml) y los resultad
 `escenarios.csv` (una fila por plan y escenario), `resumen.md`, `resumen_planes.csv`, `definicion.json` y las figuras.
 Método y resultados: [docs/decision.md](docs/decision.md).
 
+## Informe final: Plan de Control de Temperatura
+
+El informe final (Word y PDF) es [docs/informe_final/Plan_Control_Temperatura_G4.docx](docs/informe_final/). Usa
+como fecha el 19 nov **2025**, para tener clima real medido (30 temporadas ERA5) en todo el horizonte, y se arma
+desde los resultados con un solo script:
+
+```powershell
+mcplan estudio config/estudio_2025.yaml          # familia de planes con clima real (hereda de estudio.yaml)
+mcplan estudio config/confiabilidad_2025.yaml    # propuesta: 8 curvas x 30 temporadas reales
+mcplan estudio config/estres_2025.yaml           # +20 % de calor
+mcplan estudio config/retiro_2025.yaml           # retiro de protecciones (30 días)
+python scripts/informe_final.py --pdf            # el informe, sus figuras y el IFC del plan final
+```
+
+Pasos completos (malla fina, corrida de detalle, qué completar a mano): [docs/informe_final/LEEME.md](docs/informe_final/LEEME.md).
+
 ## Editor sin terminal
 
 Doble clic en **`abrir_editor.bat`** (o `mcplan editor`): se abre en el navegador un formulario para cambiar Δx,
@@ -63,7 +79,7 @@ y cada corrida queda en `resultados/editor/`. No modifica los YAML ni el IFC.
 ## Uso rápido
 
 ```powershell
-pytest                                            # 174 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
+pytest                                            # 177 tests automatizados (1D/2D/3D, voxelización, solver 3D, bordes, clima, VTK), ~2 min
 pytest -m "not lento"                             # la batería rápida (170 tests, ~1 min)
 mcplan verificar                                  # solver 1D vs. solución analítica (orden de convergencia)
 mcplan sinusoidal --dim 2                         # caso exacto 2D de la guía + orden de convergencia (--dim 3 para 3D)
@@ -77,6 +93,7 @@ mcplan voxelizar                                  # voxeliza el IFC: vertida_id,
 mcplan simular3d                                  # fundación 3D por vertidas con hidratación (config/caso_3d.yaml)
 mcplan simular3d --dx 0.5 --inicio 2=12 --T-colocacion todas=10 --ocultar 5   # la secuencia es un input
 mcplan clima pronostico                           # descarga el pronóstico de Open-Meteo como snapshot nuevo (nunca reemplaza)
+                                                  # incluye los 14 días anteriores ya ocurridos (--dias-pasados N, 0-92)
 mcplan clima info data/clima/snapshots/<archivo>  # metadata del snapshot (fuente, modelo, descarga, horizonte...)
 mcplan clima serie                                # serie horaria pronóstico + climatología ERA5 que alimenta los bordes
 mcplan simular3d config/caso_14d.yaml --vtk       # caso de 14 días con clima real, moldaje y desmolde (~5 min)
@@ -272,7 +289,7 @@ El solver no depende de Blender: sólo lee el archivo `.ifc`.
 | Solver 2D/3D (conducción, dos materiales, Dirichlet/Neumann/Robin, fuente volumétrica, hidratación) | ✅ verificado (orden 2 en 2D y 3D; hidratación = 1D) |
 | Modelo BIM oficial: 5 vertidas en Bonsai, `UANDES_HormigonMasivo` | ✅ |
 | Lectura IFC, detección de cambios, columna IFC → solver por rayo vertical | ✅ |
-| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 174 tests |
+| Tests automatizados (batería G05/E05 en 1D, 2D y 3D, ejercicios, voxelización, solver 3D, bordes, clima, VTK) | ✅ 177 tests |
 | Bloque 3D con pulso y 4 bordes (Dirichlet 20/30, Neumann, Robin), solución exacta | ✅ orden 2 |
 | Voxelización del IFC: `vertida_id`, volumen vs dx, superficies exteriores, juntas | ✅ error de volumen 0,02 % con dx = 0,05 m |
 | Estructura de activación temporal (`PlanVertidas`: `Inicio_h`, T de colocación, te = 0) | ✅ |

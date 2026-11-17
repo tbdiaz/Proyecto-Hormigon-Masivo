@@ -36,7 +36,8 @@ cambiar la conclusión, **baja** es de forma o de trazabilidad.
 
 ## 3. Recursos y controles admitidos (profesor)
 
-10. **Prioridad alta. Controles permitidos.** El plan propuesto (`unica-M10-T10-N25`) usa:
+10. ~~Controles permitidos~~: **resuelto** (16 nov): el profesor aceptó los tres controles de la propuesta. El
+    plan propuesto (`unica-M10-T10-N25`) usa:
     - hormigón **preenfriado a 10 °C** (hielo o agua fría);
     - **mantas de 10 cm en todas las caras**, junto con el moldaje, por más de tres semanas;
     - **tubos HDPE sólo en V3, V4 y V5** con **agua a 25 °C** durante 14 días: hace falta agua templada, no fría.
@@ -51,9 +52,11 @@ cambiar la conclusión, **baja** es de forma o de trazabilidad.
 
 ## 4. Sitio y construcción (grupo)
 
-13. **Prioridad media. Fecha y hora de inicio.** El estudio usa t0 = jueves 19 nov 2026, 08:00 (hora de Chile),
-    como fija la pauta. El caso determinista `config/caso_14d.yaml` usa 27 nov (fecha de las entregas E10–E12).
-    Confirmar la hora.
+13. **Prioridad media. Fecha y hora de inicio.** Decisión del grupo (16 nov): el informe final usa
+    t0 = miércoles 19 nov **2025**, 08:00, para tener clima real medido (ERA5) en todo el horizonte
+    (`config/estudio_2025.yaml`, ver [docs/informe_final/LEEME.md](informe_final/LEEME.md)). Confirmar con el
+    profesor que acepta el cambio de año; si no, `config/estudio.yaml` corre la misma familia con el pronóstico para
+    la fecha de la defensa.
 14. **Prioridad media. Excavación:** ¿la fundación va enterrada? ¿A qué profundidad queda el terreno natural (se
     probó 3,3 m) y con qué sobreancho (1 m)? Cambia el abrigo del viento ([docs/excavacion.md](excavacion.md)).
 15. **Prioridad media. Relleno:** ¿cuándo se rellena y con qué? Recién puesto, el relleno frío empeora el ΔT
@@ -69,8 +72,7 @@ cambiar la conclusión, **baja** es de forma o de trazabilidad.
     ΔT, así que conviene un dato del sitio o una sensibilidad.
 19. **Prioridad media. Mantas:** k = 0,04 W/mK en 5 y 10 cm. Respaldar con una ficha técnica.
 20. **Prioridad baja. Superficie:** absortividad 0,65 y emisividad 0,9 del hormigón (rango típico).
-21. **Prioridad baja. Grafito:** k = 4,11 W/mK de Chen et al. (2024), medido en laboratorio y en seco. Faltan el
-    calor de hidratación y la durabilidad ([docs/tubos.md](tubos.md)).
+21. ~~Grafito~~: **resuelto**, el profesor lo descartó (16 nov). El plan propuesto no lo usa.
 
 ## 6. Clima
 
@@ -82,16 +84,22 @@ cambiar la conclusión, **baja** es de forma o de trazabilidad.
 
 ## 7. Verificación numérica (miércoles, cluster)
 
-24. **Prioridad media. Malla fina en más escenarios.**
+24. **Prioridad alta. Malla fina con clima real (16 nov).** En el estudio con clima real de 2025, refinar de
+    Δx = 0,275 a 0,11 m sube el ΔT del peor escenario de la propuesta de 18,24 a 19,35 °C (+1,1 °C; con las
+    temporadas 2025 y 1996, +0,7 °C), y colocando a 12 °C el peor escenario llega a 20,26 °C. El informe final
+    corrige todas las M_Δ sumando +1,1 °C y fija el máximo de colocación en 10 °C. **En el cluster:** Δx = 0,055 m
+    en el peor escenario (M4_SS, temporada 2013) para saber si la corrección converge, y la propuesta con malla
+    0,11 m en las 30 temporadas de la curva M4_SS.
+25. **Prioridad media. Malla fina en más escenarios (estudio con pronóstico 2026).**
     - **Ya confirmado:** el peor escenario de la propuesta con Δx = 0,11 m, que subió de 18,18 a 18,33 °C (se
       mantiene bajo 20).
     - **Descartado:** el candidato anterior, `unica-M10-T10-A25`, pasó de 19,78 a 20,63 °C, porque su punto frío
       estaba bajo el escalón de V2, donde la malla importa.
     - **Pendiente para el cluster:** confirmar más escenarios de la propuesta con malla fina, y probar Δx = 0,055 m
       en el peor.
-25. **Prioridad media. Datos del cluster:** si usa SLURM, cuántos núcleos asigna, cuánta memoria y qué Python
+26. **Prioridad media. Datos del cluster:** si usa SLURM, cuántos núcleos asigna, cuánta memoria y qué Python
     tiene (hacen falta numpy, ifcopenshell y pyyaml). Con eso se agregan `--parte i/n` y `--fusionar` al estudio.
 
 ## 8. Entrega
 
-26. **Prioridad baja.** Hacer el commit y declarar el SHA de la defensa en Canvas.
+27. **Prioridad baja.** Hacer el commit, volver a correr `python scripts/informe_final.py --pdf` para que el informe cite ese commit, y declarar el SHA de la defensa en Canvas.

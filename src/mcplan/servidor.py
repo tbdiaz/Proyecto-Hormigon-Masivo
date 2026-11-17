@@ -100,7 +100,7 @@ def opciones_caso(raiz: Path, nombre: str) -> dict:
                   "materiales": ["hdpe", "pvc", "acero", "cobre"]},
         "curvas": _curvas_disponibles(raiz, caso), "curva": "ju_lei_2019",
         "moldaje": moldaje, "aislacion": aislacion, "capas": sorted(caso.capas), "relleno": relleno,
-        "excavacion": excavacion,
+        "excavacion": excavacion, "vertida_unica": {"usar": False, "tasa": 27.0},
         "cobertura": _cobertura(caso) if con_clima else None,
     }
 
@@ -195,6 +195,12 @@ def construir_argumentos(form: dict, base: dict) -> list[str]:
                 inicios.append(f"{v}={inicio:g}")
             if _distinto(T, b["T_colocacion"]):
                 temperaturas.append(f"{v}={T:g}")
+    unica = form.get("vertida_unica") or {}
+    if unica.get("usar"):
+        if not all(f.get("activa") for f in form["vertidas"]):
+            raise ValueError("Vertida única: hay que construir todas las vertidas")
+        inicios = []  # el orden lo da la bomba: los inicios de la tabla no se usan
+        args.extend(["--vertida-unica", f"{_numero(unica, 'tasa', 1, 500, 'Vertida única: tasa de la bomba'):g}"])
     for bandera, valores in (("--inicio", inicios), ("--T-colocacion", temperaturas), ("--ocultar", ocultar),
                              ("--mostrar", mostrar)):
         if valores:
@@ -262,6 +268,12 @@ def construir_argumentos(form: dict, base: dict) -> list[str]:
                 raise ValueError("Caras de la aislación inválidas")
             if a["caras"] != ba["caras"]:
                 args.extend(["--aislacion-caras", a["caras"]])
+            ids = [b["id"] for b in base["vertidas"]]
+            elegidas = a.get("vertidas", ids)
+            if not isinstance(elegidas, list) or not set(elegidas) <= set(ids) or not elegidas:
+                raise ValueError("Aislación: elige al menos una vertida")
+            if sorted(elegidas) != ids:
+                args.extend(["--aislacion-vertidas", *[str(int(v)) for v in sorted(elegidas)]])
             if a.get("retiro_h") not in (None, ""):
                 retiro = _numero(a, "retiro_h", 0, 2000, "Retiro de la aislación")
                 if _distinto(retiro, ba["retiro_h"]):

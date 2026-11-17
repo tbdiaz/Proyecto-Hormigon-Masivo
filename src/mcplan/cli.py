@@ -603,6 +603,8 @@ def cmd_simular3d(args):
         caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "caras": args.aislacion_caras}
     if args.retiro_aislacion is not None and "aislacion" in caso.cubiertas_cfg:
         caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "retiro_h": args.retiro_aislacion}
+    if args.aislacion_vertidas and "aislacion" in caso.cubiertas_cfg:
+        caso.cubiertas_cfg["aislacion"] = {**caso.cubiertas_cfg["aislacion"], "vertidas": args.aislacion_vertidas}
     if args.aislacion_terreno:
         if args.aislacion_terreno == "ninguna":
             caso.cubiertas_cfg.pop("aislacion_terreno", None)
@@ -666,6 +668,24 @@ def cmd_simular3d(args):
             "fuera del horizonte" if ini > caso.duracion_h else "se coloca")
         print(f"    {vox.nombres[i - 1]:>11} {ini:9.1f} {plan.T_colocacion[i - 1]:12.1f}  {estado}")
 
+    act = None
+    if args.vertida_unica is not None:
+        from .planes import Etapa, PlanObra, activacion_por_capas
+
+        if args.vertida_unica <= 0:
+            raise ValueError("--vertida-unica: la tasa de la bomba debe ser positiva")
+        if not np.isfinite(plan.inicio_h).all():
+            raise ValueError("--vertida-unica coloca todas las vertidas: no se puede combinar con --ocultar")
+        todas = tuple(range(1, vox.n_vertidas + 1))
+        act, crono = activacion_por_capas(PlanObra("unica", [Etapa(todas)]), dom, vox, args.vertida_unica)
+        Tc = np.concatenate([[np.nan], plan.T_colocacion])
+        act.T_col = Tc[dom.vertida_id.astype(np.int64)]
+        act.T_col_v = np.asarray(plan.T_colocacion, float)
+        print(f"    VERTIDA ÚNICA: {crono['volumen_m3']:.0f} m³ seguidos a {args.vertida_unica:g} m³/h, por capas desde "
+              f"abajo: termina a las {crono['D_h']:.1f} h (los Inicio_h de arriba no se usan)")
+        for v in todas:
+            print(f"      {vox.nombres[v - 1]}: de {act.inicio_h[v - 1]:.1f} h a {act.fin_h[v - 1]:.1f} h")
+
     from .bordes import filas_bordes
 
     amb = caso.ambiente
@@ -673,7 +693,7 @@ def cmd_simular3d(args):
     if amb.clima is not None:
         m = caso.clima_info
         print(f"    clima desde {m['fecha_inicio']} (hora local {m['zona_horaria']}): "
-              f"{m['horas_pronostico']} h de pronóstico, {m['horas_transicion']} h de transición, "
+              f"{m.get('horas_pasado', 0)} h de clima ya ocurrido, {m['horas_pronostico']} h de pronóstico, {m['horas_transicion']} h de transición, "
               f"{m['horas_climatologia']} h de climatología")
         if m["pronostico"]:
             pr = m["pronostico"]
@@ -699,13 +719,13 @@ def cmd_simular3d(args):
         print(f"    tubo {c.nombre}: {c.material} Ø{c.diametro_mm:g} mm, {c.largo_m:.0f} m, {c.caudal_l_min:g} L/min "
               f"(Re {Re:.0f}), agua a {c.T_agua_C:g} °C, U_L ≈ {float(np.mean(c.U_L(caso.hormigon.k, caso.dx))):.1f} W/mK, "
               f"{c.durante_h:g} h desde el inicio de la Vertida_{c.vertida or 0:02d}")
-    for linea in caso.cubiertas.describir(plan.inicio_h):
+    for linea in caso.cubiertas.describir((act or plan).inicio_h):
         print(f"    {linea}")
     relleno = caso.relleno()
     if relleno is not None:
         from .simulacion3d import Activacion, Relleno
 
-        info = relleno.resolver(dom, caso.cubiertas, Activacion.desde_plan(dom, plan), amb)
+        info = relleno.resolver(dom, caso.cubiertas, act or Activacion.desde_plan(dom, plan), amb)
         print(f"    {Relleno.describir(info, caso.suelo)}")
         if info["t_h"] > caso.duracion_h:
             print(f"    AVISO: el relleno se coloca después del horizonte simulado ({caso.duracion_h:g} h): no entra")
@@ -728,7 +748,8 @@ def cmd_simular3d(args):
     if not args.sin_panel:
         from .panel import Recolector
 
-        recolector = Recolector(dom, caso.duracion_h, [e[0] for e in plan.eventos()])
+        recolector = Recolector(dom, caso.duracion_h, sorted(set(act.inicio_h.tolist())) if act is not None
+                                else [e[0] for e in plan.eventos()])
 
     def observar(t_h, T, activas):
         if recolector:
@@ -743,9 +764,12 @@ def cmd_simular3d(args):
         factor_seguridad=caso.factor_seguridad, puntos=caso.puntos, instantes_3d_h=caso.instantes_3d_h,
         informar=lambda m: print("    " + m), observador=observar, cubiertas=caso.cubiertas,
         profundidad_tmin=caso.profundidad_tmin, superficie_tmin=caso.superficie_tmin,
-        materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos, relleno=relleno,
+        materiales_vertida=caso.materiales_vertida(), tubos=caso.tubos, relleno=relleno, activacion=act,
     )
     t_calculo = time.perf_counter() - t1
+    if act is not None:
+        res.plan = act  # para las figuras y el panel: cuándo existe cada vertida en este plan
+    plan_v = act if act is not None else plan  # cuándo empieza cada vertida, para el resumen y el panel
     print(f"    ({t_calculo:.1f} s de cálculo, dt = {res.dts[-1][1]:.0f} s)")
 
     i = int(np.nanargmax(res.Tmax))
@@ -797,8 +821,8 @@ def cmd_simular3d(args):
         "caso": str(args.caso), "dx_m": caso.dx, "duracion_h": caso.duracion_h, "cambios": registro,
         "error_volumen": {n: vox.error_volumen(k + 1) for k, n in enumerate(vox.nombres)},
         "error_volumen_total": vox.error_volumen_total,
-        "secuencia": [{"vertida": n, "Inicio_h": float(plan.inicio_h[k]) if np.isfinite(plan.inicio_h[k]) else None,
-                       "T_colocacion_C": float(plan.T_colocacion[k])} for k, n in enumerate(vox.nombres)],
+        "secuencia": [{"vertida": n, "Inicio_h": float(plan_v.inicio_h[k]) if np.isfinite(plan_v.inicio_h[k]) else None,
+                       "T_colocacion_C": float(plan_v.T_colocacion[k])} for k, n in enumerate(vox.nombres)],
         "Tmax_C": float(res.Tmax[i]), "t_Tmax_h": float(res.t_h[i]), "posicion_Tmax_m": res.Tmax_pos[i].tolist(),
         "dTmax_C": float(res.dT[j]), "t_dTmax_h": float(res.t_h[j]), "criterio_Tmin": res.criterio_Tmin,
         "Tmax_en_dTmax_posicion_m": res.Tmax_pos[j].tolist(), "Tmin_en_dTmax_C": float(res.Tmin_sup[j]),
@@ -807,7 +831,7 @@ def cmd_simular3d(args):
         "t_dTmax_con_aristas_h": float(res.t_h[int(np.nanargmax(res.Tmax - res.Tmin_todas))]),
         "Tmin_aristas_posicion_m": res.Tmin_todas_pos[int(np.nanargmax(res.Tmax - res.Tmin_todas))].tolist(),
         "fecha_inicio": caso.fecha_inicio, "clima": caso.clima_info or caso.T_amb_texto,
-        "ambiente": amb.describir(), "cubiertas": caso.cubiertas.describir(plan.inicio_h),
+        "ambiente": amb.describir(), "cubiertas": caso.cubiertas.describir(plan_v.inicio_h),
         "retiros": [{"t_h": t, "evento": d} for t, d in res.retiros], "bordes": filas,
         "Tmax_vertida_C": {n: (float(np.nanmax(res.Tmax_vertida[:, k])) if np.isfinite(res.Tmax_vertida[:, k]).any()
                                else None) for k, n in enumerate(vox.nombres)},
@@ -867,7 +891,7 @@ def cmd_simular3d(args):
         from .panel import datos_panel, escribir_panel
 
         comando = "mcplan " + " ".join(sys.argv[1:])
-        escribir_panel(salida / "panel.html", datos_panel(res, caso, vox, plan, registro, recolector, comando))
+        escribir_panel(salida / "panel.html", datos_panel(res, caso, vox, plan_v, registro, recolector, comando))
         archivos.append("panel.html (ábrelo en el navegador)")
     print(f"\nArchivos en {salida}: " + ", ".join(archivos) + f"   [total {time.perf_counter() - t0:.0f} s]")
     return 0
@@ -881,7 +905,8 @@ def cmd_clima(args):
     from . import clima as cl
 
     if args.accion == "pronostico":
-        ruta = cl.descargar_pronostico(args.sitio, args.modelo, args.dias, args.carpeta, args.indice)
+        ruta = cl.descargar_pronostico(args.sitio, args.modelo, args.dias, args.carpeta, args.indice,
+                                       args.dias_pasados)
         print(f"Snapshot nuevo: {ruta}")
         args.archivo = ruta
         args.accion = "info"
@@ -1066,7 +1091,28 @@ def cmd_estudio(args):
         vistas = sorted({min(res.campos, key=lambda a: abs(a - res.t_h[i])), min(res.campos, key=lambda a: abs(a - D))})
         graficar_vista_3d(res, vistas, carpeta / "vista_3d.png")
         exportar_vtk(res, carpeta / "vtk")
-        print(f"  Archivos en {carpeta}: tmax.png, nucleo_superficie.png, cortes_y0.png, vista_3d.png, vtk/")
+        archivos = "tmax.png, nucleo_superficie.png, cortes_y0.png, vista_3d.png, vtk/"
+        if res.tubos:  # para dimensionar el equipo de agua: potencia, temperatura de salida y energía por circuito
+            import json
+
+            def _max(x):
+                x = np.asarray(x, dtype=float)
+                return float(np.nanmax(x)) if np.isfinite(x).any() else None
+
+            tubos = {n: {"largo_m": float(s["largo_m"]), "U_L_medio_W_mK": float(s["U_L_medio"]),
+                         "potencia_max_kW": float(np.nan_to_num(s["potencia_W"]).max() / 1000),
+                         "energia_MJ": float(s["energia_J"][-1]) / 1e6 if len(s["energia_J"]) else 0.0,
+                         "T_salida_max_C": _max(s["T_salida_C"]), "dT_agua_max_C": _max(s["dT_agua_max_C"]),
+                         "t_h": np.asarray(s["t_h"], dtype=float).tolist(),
+                         "potencia_kW": (np.nan_to_num(s["potencia_W"]) / 1000).tolist(),
+                         "T_salida_C": np.asarray(s["T_salida_C"], dtype=float).tolist()}
+                     for n, s in res.tubos.items()}
+            (carpeta / "tubos.json").write_text(json.dumps(tubos, ensure_ascii=False, allow_nan=True), encoding="utf-8")
+            archivos += ", tubos.json"
+            for n, s in tubos.items():
+                print(f"  {n}: {s['largo_m']:.0f} m, potencia máx {s['potencia_max_kW']:.1f} kW, "
+                      f"energía {s['energia_MJ']:.0f} MJ, agua a la salida hasta {s['T_salida_max_C']:.1f} °C")
+        print(f"  Archivos en {carpeta}: {archivos}")
         return 0
 
     if args.sensibilidad:
@@ -1313,6 +1359,11 @@ def construir_parser() -> argparse.ArgumentParser:
     s.add_argument("--aislacion", metavar="CAPA", help="capa del YAML sobre las caras superiores (o 'ninguna')")
     s.add_argument("--retiro-aislacion", type=float, metavar="H", help="retiro de la aislación H horas después")
     s.add_argument("--aislacion-caras", choices=("superiores", "laterales", "todas"), help="dónde va la aislación")
+    s.add_argument("--vertida-unica", type=float, nargs="?", const=27.0, metavar="M3_H",
+                   help="vaciar todas las vertidas seguidas, por capas desde abajo, a la tasa de la bomba "
+                        "(por defecto 27 m³/h, como el estudio); cada vertida conserva su T de colocación")
+    s.add_argument("--aislacion-vertidas", type=int, nargs="+", metavar="V",
+                   help="vertidas que llevan la aislación (por defecto, todas), p. ej. 1 2 3 4")
     s.add_argument("--aislacion-terreno", metavar="CAPA",
                    help="capa del YAML sobre el suelo alrededor de la fundación, desde t = 0 (o 'ninguna')")
     s.add_argument("--retiro-aislacion-terreno", type=float, metavar="H", help="retiro de esa capa a las H horas")
@@ -1369,6 +1420,8 @@ def construir_parser() -> argparse.ArgumentParser:
         if nombre == "pronostico":
             a.add_argument("--modelo", default="ecmwf_ifs025", help="modelo de Open-Meteo (ecmwf_ifs025, gfs_seamless...)")
             a.add_argument("--dias", type=int, default=16)
+            a.add_argument("--dias-pasados", type=int, default=14, metavar="N",
+                           help="incluir también los N días anteriores (clima ya ocurrido, 0-92; por defecto 14)")
         else:
             a.add_argument("--fecha-inicio", default="2026-11-27T08:00", help="hora local de la primera vertida")
             a.add_argument("--anios", type=int, nargs=2, default=[2016, 2025], metavar=("DESDE", "HASTA"))

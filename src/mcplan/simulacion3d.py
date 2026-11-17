@@ -290,6 +290,10 @@ class Activacion:
     def vertidas_activas(self, t_h) -> list[int]:
         return [v + 1 for v, t in enumerate(self.inicio_h) if t <= t_h + 1e-9]
 
+    @property
+    def T_colocacion(self) -> np.ndarray:  # como PlanVertidas, para el resumen y el panel
+        return self.T_col_v
+
 
 @dataclass
 class Relleno:
@@ -1176,7 +1180,7 @@ def preparar_clima(caso: Caso3D) -> None:
     caso.clima_info = {**clima.metadata, "suelo": info_suelo}
     T = clima.T_aire
     caso.T_amb_texto = (f"clima real: T aire {T.min():.1f}–{T.max():.1f} °C (media {T.mean():.1f}); "
-                        f"{clima.metadata['horas_pronostico']} h de pronóstico, "
+                        f"{clima.metadata.get('horas_pasado', 0)} h de clima ya ocurrido, {clima.metadata['horas_pronostico']} h de pronóstico, "
                         f"{clima.metadata['horas_climatologia']} h de climatología")
 
 

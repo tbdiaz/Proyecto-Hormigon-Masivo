@@ -1,0 +1,12 @@
+# Prueba de estrés del plan propuesto: las 8 curvas con 20 % más de calor (24 corridas, ~4 min).
+#
+#   mcplan estudio config/estres_2025.yaml
+#
+# El encabezado de data/hidratacion/source_terms.txt da la energía con β = 2,1 y 3,0 W/m²K: x0,84 y x1,20 respecto
+# de β = 2,5. La escala 1,2 cubre el extremo superior de esa incertidumbre de la inversión de las probetas.
+
+hereda: estudio_2025.yaml
+salida: ../resultados/estres_2025
+curvas:
+  escala: 1.2
+planes: [unica-M10-T10-N25, unica-M10-T8-N25]   # el máximo admisible (10 °C) y la meta de la planta (8 °C)

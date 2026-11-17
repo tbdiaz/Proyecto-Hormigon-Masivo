@@ -225,3 +225,13 @@ Si el ayudante pregunta por la ecuación exacta del viento y la radiación: `bor
 - Las capas no tienen capacidad térmica.
 - La escalera de los troncos sobrestima su área expuesta en ~30 %.
 - La climatología no trae eventos extremos.
+
+## Fechas de inicio en el pasado (16 nov 2026)
+
+`mcplan clima pronostico` pide a Open-Meteo los **14 días anteriores** a la descarga (`--dias-pasados N`, 0–92).
+Esos días son el clima **ya ocurrido** según el mismo modelo: las primeras horas de cada emisión, que asimilan
+observaciones. No son una medición de una estación en el sitio. En la serie aparecen como `pasado (análisis)`.
+
+Una simulación que parte hasta 14 días atrás usa así el clima real de esos días, luego el pronóstico y, al final,
+la transición y la climatología. Los snapshots anteriores, bajados sin días pasados, siguen usando la climatología
+ERA5 para las horas previas a su descarga.

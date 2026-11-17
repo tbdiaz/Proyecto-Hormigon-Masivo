@@ -149,6 +149,10 @@ function construir() {
   }
   f.append(grupo("Malla y tiempo", ...tiempo));
 
+  const unicaUsar = el("input", { type: "checkbox", id: "unica_usar", checked: b.vertida_unica.usar });
+  const unicaTasa = campoNumero("unica_tasa", b.vertida_unica.tasa, 1, 500, 1);
+  unicaTasa.disabled = !unicaUsar.checked;
+  unicaUsar.addEventListener("change", () => { unicaTasa.disabled = !unicaUsar.checked; b.vertidas.forEach(v => $(`v${v.id}_activa`).dispatchEvent(new Event("change"))); });
   const filas = b.vertidas.map(v => {
     const activa = el("input", { type: "checkbox", id: `v${v.id}_activa`, checked: v.activa });
     const inicio = campoNumero(`v${v.id}_inicio`, v.inicio_h, 0, 720, 1), T = campoNumero(`v${v.id}_T`, v.T_colocacion, -5, 45, 0.5);
@@ -156,12 +160,14 @@ function construir() {
     kv.setAttribute("aria-label", `${v.nombre}: conductividad del hormigón`);
     inicio.setAttribute("aria-label", `${v.nombre}: inicio en horas`);
     T.setAttribute("aria-label", `${v.nombre}: temperatura de colocación`);
-    const actualizar = () => { inicio.disabled = T.disabled = !activa.checked; };
+    const actualizar = () => { T.disabled = !activa.checked; inicio.disabled = !activa.checked || $("unica_usar")?.checked; };
     activa.addEventListener("change", actualizar); actualizar();
     return el("tr", {}, el("td", {}, el("label", { className: "check" }, activa, v.nombre.replace("Vertida_0", "V"))), el("td", {}, inicio), el("td", {}, T), el("td", {}, kv));
   });
   f.append(grupo("Vertidas", el("table", {}, el("thead", {}, el("tr", {}, el("th", {}, "Construir"), el("th", {}, "Inicio [h]"), el("th", {}, "T col. [°C]"), el("th", {}, "k [W/mK]"))), el("tbody", {}, ...filas)),
-    el("p", { className: "nota" }, "k: conductividad del hormigón de esa vertida. Con árido recubierto de grafito, Chen et al. (2024) midieron 4,11 W/mK, 1,9 veces el mismo hormigón sin grafito.")));
+    el("div", { className: "par" }, el("label", { className: "check" }, unicaUsar, "Vertida única: todo seguido, por capas desde abajo"), el("span")),
+    par("Tasa de la bomba", "m³/h", unicaTasa),
+    el("p", { className: "nota" }, "Vertida única: las 5 vertidas se vacían sin pausa a la tasa de la bomba (637 m³ a 27 m³/h ≈ 24 h), como en mcplan estudio; los inicios de la tabla no se usan. k: conductividad del hormigón de esa vertida (el profesor descartó el árido con grafito).")));
 
   const curva = el("select", { id: "curva" }, ...b.curvas.map(c => el("option", { value: c.nombre }, c.etiqueta)));
   curva.value = b.curva;
@@ -185,14 +191,17 @@ function construir() {
     const caras = el("select", { id: "aislacion_caras" }, ...["superiores", "laterales", "todas"].map(c => el("option", { value: c }, c)));
     caras.value = b.aislacion.caras;
     const retiroA = campoNumero("aislacion_retiro", b.aislacion.retiro_h, 0, 2000, 1);
-    const actualizar = () => { caras.disabled = retiroA.disabled = capa.value === "ninguna"; };
+    const marcasA = b.vertidas.map(v => el("input", { type: "checkbox", id: `aislacion_v${v.id}`, checked: true }));
+    const actualizar = () => { caras.disabled = retiroA.disabled = capa.value === "ninguna"; marcasA.forEach(m => { m.disabled = capa.value === "ninguna"; }); };
     capa.addEventListener("change", actualizar); actualizar();
     f.append(grupo("Moldaje y aislación",
       el("div", { className: "par" }, el("label", { className: "check" }, usar, `Moldaje (${b.moldaje.capa.replaceAll("_", " ")})`), el("span")),
       par("Retiro tras colocar", "h", retiro),
       el("div", { className: "par ancho" }, el("label", { htmlFor: "aislacion_capa" }, "Aislación"), capa),
       el("div", { className: "par ancho" }, el("label", { htmlFor: "aislacion_caras" }, "Caras"), caras),
-      par("Retiro aislación", "h", retiroA)));
+      par("Retiro aislación", "h", retiroA),
+      el("div", { className: "par ancho" }, el("span", {}, "Aislación en"),
+        el("span", {}, ...b.vertidas.map((v, i) => el("label", { className: "check" }, marcasA[i], v.nombre.replace("Vertida_0", "V") + " "))))));
   }
   if (b.excavacion) {
     const E = b.excavacion;
@@ -291,10 +300,12 @@ function leerForm() {
     absortividad: numero("absortividad"), emisividad: numero("emisividad"), fecha_inicio: numero("fecha_inicio")?.slice(0, 16),
     vertidas: b.vertidas.map(v => ({ activa: $(`v${v.id}_activa`).checked, inicio_h: numero(`v${v.id}_inicio`), T_colocacion: numero(`v${v.id}_T`),
                                      k: numero(`v${v.id}_k`) })),
-    tubos: leerCircuitos(), curva: $("curva").value };
+    tubos: leerCircuitos(), curva: $("curva").value,
+    vertida_unica: { usar: $("unica_usar").checked, tasa: numero("unica_tasa") } };
   if (b.moldaje) {
     datos.moldaje = { usar: $("moldaje_usar").checked, retiro_h: numero("moldaje_retiro") };
-    datos.aislacion = { capa: $("aislacion_capa").value, caras: $("aislacion_caras").value, retiro_h: numero("aislacion_retiro") };
+    datos.aislacion = { capa: $("aislacion_capa").value, caras: $("aislacion_caras").value, retiro_h: numero("aislacion_retiro"),
+                        vertidas: b.vertidas.filter(v => $(`aislacion_v${v.id}`).checked).map(v => v.id) };
   }
   if (b.excavacion) datos.excavacion = { usar: $("excavacion_usar").checked, profundidad: numero("excavacion_profundidad"),
                                          sobreancho: numero("excavacion_sobreancho"), factor_abrigo: numero("excavacion_abrigo"),

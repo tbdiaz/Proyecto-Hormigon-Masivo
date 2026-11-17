@@ -1,0 +1,21 @@
+# Retiro tardío de las protecciones: el día 33 (768 h después de terminar la vertida), con 900 h simuladas para ver
+# el choque térmico del retiro. Complementa config/retiro_2025.yaml (días 14, 21 y 26).
+#
+#   mcplan estudio config/retiro_tardio_2025.yaml   # 8 curvas x 3 historias = 24 corridas (~10 min)
+
+hereda: retiro_2025.yaml
+salida: ../resultados/retiro_tardio_2025
+horizonte_h: 900
+
+planes:
+  - nombre: propuesta-retiro-d33
+    descripcion: la propuesta, retirando moldaje y mantas el día 33 (768 h después de terminar la vertida)
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 768}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 768}
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}

@@ -55,6 +55,28 @@ def test_cambios_se_traducen_a_opciones_validas_del_cli(base):
     assert a.aislacion_caras == "todas" and a.retiro_aislacion == 300
 
 
+def test_aislacion_en_algunas_vertidas(base):
+    f = _form(base)
+    f["aislacion"].update(capa="manta_5cm", caras="todas", vertidas=[1, 2, 3, 4])
+    a = construir_parser().parse_args(["simular3d", "config/caso_14d.yaml", *construir_argumentos(f, base)])
+    assert a.aislacion_vertidas == [1, 2, 3, 4]
+    f["aislacion"]["vertidas"] = []
+    with pytest.raises(ValueError):
+        construir_argumentos(f, base)
+
+
+def test_vertida_unica_desde_el_editor(base):
+    f = _form(base)
+    assert base["vertida_unica"] == {"usar": False, "tasa": 27.0}
+    f["vertidas"][1]["inicio_h"] = 50  # con vertida única los inicios no se usan
+    f["vertida_unica"] = {"usar": True, "tasa": 27}
+    a = construir_parser().parse_args(["simular3d", "config/caso_14d.yaml", *construir_argumentos(f, base)])
+    assert a.vertida_unica == 27 and not a.inicio
+    f["vertidas"][4]["activa"] = False
+    with pytest.raises(ValueError):
+        construir_argumentos(f, base)
+
+
 def test_relleno_se_traduce_al_cli(base):
     f = _form(base)
     assert base["relleno"]["usar"] is False and base["relleno"]["tope_m"] > 4

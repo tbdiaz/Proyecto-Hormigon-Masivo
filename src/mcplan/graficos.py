@@ -625,7 +625,7 @@ def graficar_clima(clima, ruta, titulo=None):
 
     t = clima.t_h
     fig, ejes = plt.subplots(3, 1, figsize=(10, 7.5), sharex=True)
-    colores = {"pronóstico": "#2a78d6", "transición": "#eda100", "climatología ERA5": "0.6"}
+    colores = {"pasado (análisis)": "#1a9e5c", "pronóstico": "#2a78d6", "transición": "#eda100", "climatología ERA5": "0.6"}
     origen = np.array(clima.origen)
     for ax in ejes:
         for nombre, color in colores.items():

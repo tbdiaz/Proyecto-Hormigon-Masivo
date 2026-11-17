@@ -87,6 +87,14 @@ def test_perfil_de_suelo_desde_era5(tmp_path):
     T_z, T_fondo, info = perfil_suelo(_era5(tmp_path), "2026-11-27T08:00")
     assert T_z(-0.035) == pytest.approx(12.0) and T_z(-3.0) == pytest.approx(15.0) and T_fondo == pytest.approx(15.0)
     assert info["profundidades_m"] == [0.035, 0.175, 0.64, 1.775]
+    # Suelo real: el estado de ese año a la hora de inicio, sin promediar años (2021 tiene sus capas 1 °C más frías).
+    (tmp_path / "real").mkdir()
+    era5 = _era5(tmp_path / "real")
+    era5["respuesta"]["por_anio"]["2021"]["hourly"]["soil_temperature_0_to_7cm"] = [11.0] * 24 * 20
+    T_z, _, info = perfil_suelo(era5, "2021-11-27T08:00", anio=2021)
+    assert T_z(-0.035) == pytest.approx(11.0) and "real" in info["nota"]
+    T_z, _, _ = perfil_suelo(era5, "2021-11-27T08:00")
+    assert T_z(-0.035) == pytest.approx(11.5)  # climatología: promedio de 2020 (12) y 2021 (11)
 
 
 @pytest.mark.skipif(not SNAPSHOTS.exists(), reason="no hay snapshots reales")
@@ -99,3 +107,16 @@ def test_snapshots_reales_tienen_la_metadata_del_curso():
         assert all(campo in m for campo in CAMPOS_METADATA)
         assert m["sitio"]["latitud"] == pytest.approx(-34.105457) and m["sitio"]["longitud"] == pytest.approx(-71.649539)
         assert m["unidades"]["temperature_2m"] == "°C" and m["unidades"]["wind_speed_10m"] == "m/s"
+
+
+def test_dias_pasados_usan_el_clima_ocurrido(tmp_path):
+    """Un pronóstico bajado con past_days trae los días anteriores a la descarga: se marcan como clima ya ocurrido."""
+    era5 = _era5(tmp_path)
+    meta = {"tipo": "pronostico", "fuente": "prueba", "modelo": "m", "descargado_utc": "2026-11-27T11:00:00Z",
+            "utc_offset_s": -3 * 3600, "sitio": {"latitud": 0, "longitud": 0},
+            "horizonte": {"desde": "2026-11-25T08:00", "hasta": ""}}
+    ruta = _guardar(tmp_path, "p.json", meta, {"hourly": _hourly("2026-11-25T08:00", 72, [20.0] * 72)},
+                    tmp_path / "indice.csv")
+    c = ensamblar("2026-11-25T08:00", 60, leer_snapshot(ruta), era5)  # descarga: 27 nov 08:00 hora local
+    assert c.metadata["horas_pasado"] == 48 and c.metadata["horas_pronostico"] == 13
+    assert c.origen[0] == "pasado (análisis)" and c.origen[48] == "pronóstico" and np.allclose(c.T_aire, 20.0)

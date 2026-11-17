@@ -1,5 +1,17 @@
 # Decisión probabilística del plan de vertidas (E13 / defensa F02) — Grupo 4, Litueche
 
+> **Informe final (16 nov 2026):** el Plan de Control de Temperatura está en
+> [docs/informe_final/](informe_final/). Usa el clima real de 2025 (30 temporadas ERA5) en vez del pronóstico de
+> este documento.
+>
+> - **Confirma la propuesta** `unica-M10-T10-N25`.
+> - **Ajusta la colocación:** máximo 10 °C a la descarga y meta de 8 °C en planta. Colocando a 12 °C, la malla fina
+>   supera los 20 °C.
+> - **Corrige la malla:** suma +1,1 °C a todas las M_Δ.
+> - **Retiro de las protecciones:** gradual y condicionado a los sensores, desde el día 26.
+>
+> Este documento queda como registro del estudio con el pronóstico para la fecha de la defensa.
+
 **Pregunta.** ¿Cómo colocar todo el hormigón en el menor tiempo posible con
 $P_f = P(\{M_T > 70\,°C\} \cup \{M_\Delta > 20\,°C\}) \le 5\,\%$, bajo un modelo de incertidumbre declarado?
 
@@ -288,6 +300,39 @@ en la resolución final.**
 ($P_f$ = 100 %): mientras se espera, las primeras vertidas se enfrían hacia el suelo, y las siguientes se calientan
 encima de ellas. Esperar alarga D y empeora el ΔT.
 
+### Cómo correr el plan propuesto uno mismo
+
+**En el editor** (`mcplan editor`), partiendo del caso `caso_14d.yaml`:
+
+1. **Malla y tiempo:** Δx = 0,275; duración 360 h; fecha de inicio 2026-11-19T08:00.
+2. **Vertidas:** marcar **Vertida única** (tasa 27 m³/h) y poner **T col. = 10** en las cinco.
+3. **Hidratación:** la curva **M4_SS**, que da el peor escenario de la propuesta.
+4. **Moldaje y aislación:**
+   - moldaje con retiro a 600 h;
+   - aislación `manta_10cm` en **todas** las caras, en todas las vertidas, con retiro a 600 h.
+5. **Tubos:** tres circuitos, uno en cada una de V3, V4 y V5:
+   - material HDPE;
+   - separación 1 m;
+   - caudal 20 L/min;
+   - agua a 25 °C;
+   - 14 días.
+
+**Por línea de comandos** (PowerShell):
+
+```powershell
+$T = "material=hdpe","separacion=1","caudal=20","T_agua=25","dias=14"
+mcplan simular3d config/caso_14d.yaml --dx 0.275 --duracion 360 --curva M4_SS --fecha-inicio 2026-11-19T08:00 `
+  --vertida-unica --T-colocacion 1=10 2=10 3=10 4=10 5=10 --retiro-moldaje 600 `
+  --aislacion manta_10cm --aislacion-caras todas --retiro-aislacion 600 `
+  --tubo vertida=3 @T --tubo vertida=4 @T --tubo vertida=5 @T --salida resultados/propuesta_editor
+```
+
+**Resultado esperado:** Tmax ≈ 49 °C y ΔT ≈ 18,2 °C a las ~142 h, que cumplen. Es el mismo valor que el estudio, que
+da 18,18 °C con el clima del ensemble.
+
+**Diferencias con `mcplan estudio`:** la corrida suelta usa un solo clima, el del caso, y no la mezcla de historias
+del ensemble. Para la probabilidad $P_f$ sigue haciendo falta el estudio.
+
 ### Qué hace cada medida
 
 Se lee comparando las filas de la tabla.
@@ -341,8 +386,8 @@ corregidas hay que proteger la superficie.
 - **Excavación**, que da menos viento y menos cielo bajo el terreno ([docs/excavacion.md](excavacion.md)).
 - **Manta sobre el terreno** (`aislacion_terreno`). Casi no cambia el resultado, porque el frío viene del suelo bajo
   la losa.
-- **Hormigón con grafito**, con un k más alto respaldado por Chen et al. (2024): 4,11 W/mK, con −1,7 % de
-  resistencia a compresión ([docs/tubos.md](tubos.md), sección 3).
+- **Hormigón con grafito** (Chen et al. 2024, k = 4,11 W/mK). **Descartado por el profesor** (16 nov 2026); el
+  plan propuesto no lo usa. La opción `--k-vertida` sigue disponible sólo como sensibilidad.
 
 ## 8. Qué llevar al taller E13 y a la defensa
 

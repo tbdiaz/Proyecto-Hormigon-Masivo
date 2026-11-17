@@ -1,5 +1,7 @@
 """Decisión probabilística (E13/F02): curvas, planes, activación por capas, balance de energía y agregación."""
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -142,6 +144,43 @@ def test_historias_reducidas_y_pesos():
     assert [h["peso"] for h in elegidas] == pytest.approx([1 / 3] * 3)
     assert [h["representante"] for h in elegidas] == ["m1", "m4", "m7"]  # la mediana de cada tercil
     assert elegidas[0]["etiqueta"] == "fría" and elegidas[0]["miembros"] == ["m0", "m1", "m2"]
+    todas = reducir_historias([(f"ERA5 {2000 + i}", c) for i, (_, c) in enumerate(historias)], 9)
+    assert sorted(h["etiqueta"] for h in todas) == [f"ERA5_{2000 + i}" for i in range(9)]  # sin reducción: su nombre
+    assert [h["peso"] for h in todas] == pytest.approx([1 / 9] * 9)
+
+
+def test_estudio_que_hereda_otro(tmp_path):
+    """Un estudio puede partir de otro: cambia t0 y el clima, y toma planes de la familia por su nombre."""
+    from mcplan.estudio import cargar_estudio
+
+    (tmp_path / "base.yaml").write_text("""\
+caso: caso.yaml
+salida: ../r/base
+t0: '2026-11-19T08:00'
+curvas: {archivo: c.txt, pesos: iguales}
+clima: {fuente: ensemble, historias: 3, ventana_dias: 3}
+planes:
+  - {nombre: a, etapas: [[1]]}
+  - {nombre: b, etapas: [[1]], T_colocacion: 10}
+""", encoding="utf-8")
+    (tmp_path / "hijo.yaml").write_text("""\
+hereda: base.yaml
+t0: '2025-11-19T08:00'
+clima: {fuente: era5_bloques, historias: 30}
+planes: [b]
+""", encoding="utf-8")
+    (tmp_path / "nieto.yaml").write_text("""\
+hereda: hijo.yaml
+curvas: {escala: 1.2}
+""", encoding="utf-8")
+    c = cargar_estudio(tmp_path / "nieto.yaml")
+    assert c["t0"] == "2025-11-19T08:00" and c["curvas"] == {"archivo": "c.txt", "pesos": "iguales", "escala": 1.2}
+    assert c["clima"] == {"fuente": "era5_bloques", "historias": 30, "ventana_dias": 3}
+    assert c["planes"] == [{"nombre": "b", "etapas": [[1]], "T_colocacion": 10}]
+    assert Path(c["_salida"]).name == "nieto"  # la salida no se hereda: cada estudio escribe en su carpeta
+    (tmp_path / "malo.yaml").write_text("hereda: base.yaml\nplanes: [inventado]\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="inventado"):
+        cargar_estudio(tmp_path / "malo.yaml")
 
 
 def test_sin_planes_factibles_informa_el_de_menor_temperatura():

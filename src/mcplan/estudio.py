@@ -35,9 +35,34 @@ COLUMNAS = ["plan", "D_h", "curva", "clima", "w", "p_curva", "q_clima", "M_T", "
 # Configuración
 # ---------------------------------------------------------------------------
 
+def _fusionar(base: dict, cambios: dict) -> dict:
+    """Los diccionarios se combinan clave a clave; todo lo demás (listas, números, textos) se reemplaza."""
+    salida = dict(base)
+    for k, v in cambios.items():
+        salida[k] = _fusionar(base[k], v) if isinstance(v, dict) and isinstance(base.get(k), dict) else v
+    return salida
+
+
+def _leer_yaml(ruta: Path) -> dict:
+    """YAML del estudio con herencia: `hereda: otro.yaml` parte de ese estudio y reemplaza sólo lo que este archivo
+    declara. Un plan escrito sólo con su nombre se toma de la familia heredada (así no se copia su definición)."""
+    cfg = yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    if not cfg.get("hereda"):
+        return cfg
+    padre = _leer_yaml(ruta.parent / cfg.pop("hereda"))
+    padre.pop("salida", None)  # cada estudio escribe en su carpeta
+    if isinstance(cfg.get("planes"), list):
+        por_nombre = {p.get("nombre") or p.get("familia"): p for p in padre.get("planes", [])}
+        faltan = [p for p in cfg["planes"] if isinstance(p, str) and p not in por_nombre]
+        if faltan:
+            raise ValueError(f"{ruta.name}: planes que no están en el estudio heredado: {', '.join(faltan)}")
+        cfg["planes"] = [por_nombre[p] if isinstance(p, str) else p for p in cfg["planes"]]
+    return _fusionar(padre, cfg)
+
+
 def cargar_estudio(ruta) -> dict:
     ruta = Path(ruta)
-    cfg = yaml.safe_load(ruta.read_text(encoding="utf-8"))
+    cfg = _leer_yaml(ruta)
     base = ruta.parent
     cfg["_ruta"] = str(ruta)
     cfg["_caso"] = str((base / cfg["caso"]).resolve())
@@ -105,7 +130,11 @@ def preparar_escenarios(cfg, informar=print) -> dict:
     elegidas = reducir_historias(todas, int(cl.get("historias", 3)), float(cl.get("dias_indice", 7)))
     for h in elegidas:
         h["clave"] = h["etiqueta"]
-    T_z, T_fondo, info_suelo = perfil_suelo(era5, t0, int(cl.get("ventana_dias", 3)))
+    # suelo_inicial: "climatologia" (promedio de los años del snapshot) o "real" (el estado medido por ERA5 en el
+    # mismo t0: se puede conocer antes de vaciar, a diferencia del clima de los 14 días siguientes).
+    real = cl.get("suelo_inicial", "climatologia") == "real"
+    T_z, T_fondo, info_suelo = perfil_suelo(era5, t0, int(cl.get("ventana_dias", 3)),
+                                            anio=int(str(t0)[:4]) if real else None)
     suelo = {"prof": info_suelo["profundidades_m"], "T": info_suelo["T_capas_C"], "fondo": T_fondo}
     informar(f"Curvas: {len(fuentes)} ({', '.join(fuentes)}); historias: {len(elegidas)} de {len(todas)} "
              f"({origen_clima['fuente']}); planes: {len(planes)}; horizonte de simulación {horas:g} h")

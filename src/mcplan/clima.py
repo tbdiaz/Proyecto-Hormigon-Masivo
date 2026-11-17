@@ -112,16 +112,23 @@ def _sitio(ruta_sitio) -> dict:
 
 
 def descargar_pronostico(ruta_sitio="config/sitio.yaml", modelo="ecmwf_ifs025", dias=16, carpeta=CARPETA,
-                         indice=INDICE) -> Path:
-    """Descarga el pronóstico horario vigente y lo guarda como snapshot nuevo."""
+                         indice=INDICE, dias_pasados=0) -> Path:
+    """Descarga el pronóstico horario vigente y lo guarda como snapshot nuevo.
+
+    dias_pasados (0-92): Open-Meteo agrega los días anteriores a la descarga con el clima ya ocurrido según el
+    mismo modelo (las primeras horas de cada emisión, que asimilan observaciones). Con eso, una simulación que
+    parte en el pasado usa el clima real de esos días en vez de la climatología.
+    """
+    if not 0 <= int(dias_pasados) <= 92:
+        raise ValueError("dias_pasados debe estar entre 0 y 92")
     sitio = _sitio(ruta_sitio)
-    params = {"latitude": sitio["latitud"], "longitude": sitio["longitud"], "hourly": ",".join(VARIABLES_PRONOSTICO),
+    params = {"past_days": int(dias_pasados), "latitude": sitio["latitud"], "longitude": sitio["longitud"], "hourly": ",".join(VARIABLES_PRONOSTICO),
               "models": modelo, "forecast_days": dias, "timezone": ZONA, "wind_speed_unit": "ms"}
     ahora = datetime.now(timezone.utc)
     datos, url = _pedir(API_PRONOSTICO, params)
     metadata = {
         "tipo": "pronostico", "fuente": "Open-Meteo Forecast API", "endpoint": API_PRONOSTICO, "url": url,
-        "parametros": params, "modelo": modelo, "descargado_utc": ahora.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "parametros": params, "modelo": modelo, "dias_pasados": int(dias_pasados), "descargado_utc": ahora.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "sitio": sitio,
         "punto_modelo": {"latitud": datos["latitude"], "longitud": datos["longitude"], "elevacion_m": datos["elevation"]},
         "zona_horaria": datos["timezone"], "utc_offset_s": datos["utc_offset_seconds"],
@@ -273,6 +280,12 @@ def ensamblar(fecha_inicio, duracion_h, pronostico=None, era5=None, transicion_h
                 peso = np.clip(1 - (horas - horas[ultima]) / transicion_h, 0, 1) if transicion_h > 0 else 0 * horas
                 valores[k] = np.where(despues, valores[k] + peso * anomalia, valores[k])
             origen[cubiertas] = "pronóstico"
+            # Horas anteriores a la descarga: clima ya ocurrido (past_days), no un pronóstico.
+            m = pronostico.get("metadata", {})
+            if m.get("descargado_utc") and m.get("utc_offset_s") is not None:
+                local = (np.datetime64(m["descargado_utc"].rstrip("Z"), "m")
+                         + np.timedelta64(int(m["utc_offset_s"]) // 60, "m"))
+                origen[cubiertas & (tiempos < local)] = "pasado (análisis)"
             origen[(horas > horas[ultima]) & (horas <= horas[ultima] + transicion_h)] = "transición"
     for k in valores:
         if not np.isfinite(valores[k]).all():
@@ -288,6 +301,7 @@ def ensamblar(fecha_inicio, duracion_h, pronostico=None, era5=None, transicion_h
             "archivo": Path(era5["archivo"]).name, "anios": era5["metadata"]["anios"], "ventana_dias": ventana_dias,
             "muestras_por_hora": int(np.median(muestras)), "descargado_utc": era5["metadata"]["descargado_utc"],
             "sha256": era5["metadata"]["sha256_respuesta"]},
+        "horas_pasado": int(np.sum(origen == "pasado (análisis)")),
         "horas_pronostico": int(np.sum(origen == "pronóstico")), "horas_transicion": int(np.sum(origen == "transición")),
         "horas_climatologia": int(np.sum(origen == "climatología ERA5")), "transicion_h": transicion_h,
     }
@@ -295,7 +309,7 @@ def ensamblar(fecha_inicio, duracion_h, pronostico=None, era5=None, transicion_h
                  nubosidad=valores["nubosidad"] / 100.0, origen=list(origen), metadata=metadata)
 
 
-def perfil_suelo(era5: dict, fecha_inicio, ventana_dias=3):
+def perfil_suelo(era5: dict, fecha_inicio, ventana_dias=3, anio=None):
     """Perfil inicial del suelo T(z) y temperatura profunda, desde las capas de suelo de ERA5.
 
     Cada capa se ubica en su profundidad media (0,035; 0,175; 0,64; 1,775 m). El perfil
@@ -305,13 +319,19 @@ def perfil_suelo(era5: dict, fecha_inicio, ventana_dias=3):
     """
     t0 = np.datetime64(fecha_inicio, "m")
     capas = tuple(CAPAS_SUELO_ERA5)
+    if anio is not None:
+        # Estado real de ese año (sin promediar años ni días): sin metadata, para no compartir la caché.
+        por_anio = era5["respuesta"]["por_anio"]
+        if str(anio) not in por_anio:
+            raise ValueError(f"El snapshot ERA5 no trae el año {anio} para el suelo inicial")
+        era5, ventana_dias = {"respuesta": {"por_anio": {str(anio): por_anio[str(anio)]}}}, 0
     al_inicio, _ = climatologia(era5, np.array([t0]), capas, ventana_dias)
     horas = t0 + np.arange(0, 14 * 24 + 1, 6).astype("timedelta64[h]")
     en_ventana, _ = climatologia(era5, horas, capas[-1:], ventana_dias)
     prof = np.array(list(CAPAS_SUELO_ERA5.values()))
     T_capas = np.array([al_inicio[c][0] for c in capas])
     T_profunda = float(np.nanmean(en_ventana[capas[-1]])) if np.isfinite(en_ventana[capas[-1]]).any() else np.nan
-    nota = "climatología a la hora de inicio"
+    nota = "climatología a la hora de inicio" if anio is None else f"estado real de ERA5 en {fecha_inicio}"
     if not np.isfinite(T_capas).all() or not np.isfinite(T_profunda):
         # La fecha de inicio cae fuera de la ventana del snapshot (p. ej. una demo con fechas del pronóstico):
         # se usa el promedio de cada capa en todo el snapshot y se deja constancia.
@@ -438,7 +458,10 @@ def reducir_historias(historias, k=3, dias_indice=7) -> list[dict]:
     for n, g in enumerate(grupos):
         mediana = float(np.median(indices[g]))
         rep = int(g[np.argmin(np.abs(indices[g] - mediana))])
-        etiqueta = ("fría", "media", "cálida")[n] if k == 3 else f"grupo {n + 1}"
+        if k == len(historias):  # sin reducción: cada historia conserva su nombre (p. ej. ERA5_2025, member07)
+            etiqueta = historias[rep][0].replace(" ", "_")
+        else:
+            etiqueta = ("fría", "media", "cálida")[n] if k == 3 else f"grupo {n + 1}"
         elegidas.append({"nombre": f"{etiqueta} ({historias[rep][0]})", "etiqueta": etiqueta,
                          "representante": historias[rep][0], "clima": historias[rep][1],
                          "peso": len(g) / len(historias), "miembros": [historias[i][0] for i in g],

@@ -59,3 +59,54 @@ planes:
       aislacion: {capa: {nombre: manta_R30, espesor: 0.10, k: 0.0333333, absortividad: 0.4, emisividad: 0.9},
                   caras: todas, retiro_h: 648}
     tubos: *r28
+  # Propuesta del día 32 (r3-T8-A25-20-15-10-d32): las mismas sensibilidades; la colocación base es 8 °C.
+  - nombre: r3-T8-A25-20-15-10-d32-rhocp
+    descripcion: propuesta del día 32 con el rho cp medido en las probetas
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 744}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 744}
+    materiales: {1: {rho: 2476, cp: 1023}, 2: {rho: 2476, cp: 1023}, 3: {rho: 2476, cp: 1023}, 4: {rho: 2476, cp: 1023}, 5: {rho: 2476, cp: 1023}}
+    tubos: &r32b
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 672, T_agua_C: 15},
+                    {hasta_h: 756, T_agua_C: 10}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 672, T_agua_C: 15},
+                    {hasta_h: 756, T_agua_C: 10}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 672, T_agua_C: 15},
+                    {hasta_h: 756, T_agua_C: 10}]}
+  - nombre: r3-T8-A25-20-15-10-d32-T10
+    descripcion: propuesta del día 32 con colocación a 10 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 744}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 744}
+    tubos: *r32b
+  - nombre: r3-T8-A25-20-15-10-d32-T12
+    descripcion: propuesta del día 32 con colocación a 12 °C
+    T_colocacion: 12
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 744}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 744}
+    tubos: *r32b
+  - nombre: r3-T8-A25-20-15-10-d32-mantaR20
+    descripcion: propuesta del día 32 con una manta de R = 2,0 m2K/W
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 744}
+      aislacion: {capa: {nombre: manta_R20, espesor: 0.10, k: 0.05, absortividad: 0.4, emisividad: 0.9}, caras: todas, retiro_h: 744}
+    tubos: *r32b
+  - nombre: r3-T8-A25-20-15-10-d32-mantaR30
+    descripcion: propuesta del día 32 con una manta de R = 3,0 m2K/W
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 744}
+      aislacion: {capa: {nombre: manta_R30, espesor: 0.10, k: 0.0333333, absortividad: 0.4, emisividad: 0.9}, caras: todas, retiro_h: 744}
+    tubos: *r32b

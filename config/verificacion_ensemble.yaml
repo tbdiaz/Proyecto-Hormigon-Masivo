@@ -8,4 +8,4 @@ hereda: estudio.yaml
 salida: ../resultados/verificacion_ensemble
 clima:
   climatologia: ../data/clima/snapshots/era5_1119_1996-2025_20261116T2119Z.json
-planes: [unica-M10-T10-N25-R28]
+planes: [unica-M10-T10-N25-R28, r3-T8-A25-20-15-10-d32]

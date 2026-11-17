@@ -18,12 +18,22 @@ mcplan clima ensemble
 mcplan estudio config/estudio_era5.yaml            # familia de planes (3 terciles climáticos)
 mcplan estudio config/retiro_tubos_era5.yaml       # retiro con tubos extendidos: primera ronda
 mcplan estudio config/retiro_tubos2_era5.yaml      # retiro con tubos extendidos: segunda ronda
-mcplan estudio config/confiabilidad_era5.yaml      # propuesta final: 8 curvas x 30 temporadas
+mcplan estudio config/confiabilidad_era5.yaml      # propuesta anterior (retiro día 28): 8 curvas x 30 temporadas
+mcplan estudio config/retiro_tubos3_era5.yaml      # retiro: tercera ronda, filtrada en las temporadas críticas
+mcplan estudio config/confiabilidad_r3.yaml --planes r3-T8-A25-20-15-10-d32   # propuesta final: 8 x 30
 mcplan estudio config/estres_era5.yaml             # propuesta final con +20 % de calor
 mcplan estudio config/sensibilidad_era5.yaml       # rho cp de las probetas, colocación a 8 y 12 °C, R de la manta
 mcplan estudio config/verificacion_ensemble.yaml   # propuesta final con el clima del ensemble
 
-# 3. Malla fina. Los dos escenarios que gobiernan cada fase, con tres mallas, paso de tiempo y profundidad:
+# 3. Malla fina de la propuesta final (los que gobiernan; el pico con paso de tiempo y profundidad):
+Q=r3-T8-A25-20-15-10-d32
+mcplan estudio config/confiabilidad_r3.yaml --procesos 1 --sensibilidad $Q M4_SS ERA5_2013
+for e in "M4_SS ERA5_2022" "M4_SS ERA5_2010" "M3_SS ERA5_2023"; do
+  mcplan estudio config/confiabilidad_r3.yaml --procesos 1 --sensibilidad $Q $e \
+    --dx-variantes 0.275 0.11 --dt-variantes 600 --profundidades 0.025
+done
+#    Malla fina de la propuesta anterior (sus diferencias también entran en δ). Los dos que gobiernan cada fase,
+#    con tres mallas, paso de tiempo y profundidad:
 P=unica-M10-T10-N25-R28
 mcplan estudio config/confiabilidad_era5.yaml --procesos 1 --sensibilidad $P M4_SS ERA5_2010 --dx-variantes 0.275 0.1833 0.11
 mcplan estudio config/confiabilidad_era5.yaml --procesos 1 --sensibilidad $P M4_SS ERA5_2013 --dx-variantes 0.275 0.1833 0.11
@@ -37,8 +47,8 @@ done
 mcplan estudio config/confiabilidad_era5.yaml --detalle $P M4_SS ERA5_2010
 
 # 4. El artículo (con --pdf, Word lo exporta a PDF, cuenta las páginas y el script informa las palabras).
-#    --profesor pone su nombre en la portada (no está en el repositorio).
-python scripts/articulo_f01.py --pdf --profesor "Nombre Apellido"
+#    El profesor de la portada viene por defecto; --profesor lo cambia.
+python scripts/articulo_f01.py --pdf
 ```
 
 En el paso 3, M4_SS con la temporada 2010 es la fila con mayor `M_D` de `resultados/confiabilidad_era5/escenarios.csv`
@@ -58,13 +68,15 @@ corrida de malla fina toma ≈35 min en un proceso; no hace falta el cluster.
   remuestreo de las curvas, ni distribuciones ajustadas. La energía crítica y la prueba de +20 % son sensibilidades
   deterministas.
 - **Corrección de malla:** en los escenarios corridos con malla fina se usa directamente su M_Δ; a los demás se les
-  suma δ, la mayor diferencia entre Δx = 0,11 y 0,275 m medida en esos escenarios. La tabla δ → P_f de la sección 5
+  suma δ, la mayor diferencia entre Δx = 0,11 y 0,275 m medida en todas las corridas con malla fina (de la propuesta
+  final y de la anterior: es un error del método, no del plan). La tabla δ → P_f de la sección 5
   muestra si el error de malla puede cambiar la clasificación y da la condición de validez (δ_crít).
 - **Sensibilidad "solo SS":** tiene fila propia en la tabla de sensibilidades y un párrafo en la sección 7.4.
 
 ## Qué completar a mano
 
-- El nombre del profesor, con `--profesor` en el paso 4: no está en el repositorio y el script no lo inventa. El curso
-  (Métodos Computacionales en Obras Civiles, Universidad de los Andes) ya va en la portada.
+- Curso (IOC4201) y profesor (José Antonio Abell Mena, según Canvas) van en la portada; `--profesor` lo cambia.
+- La declaración de uso de IA (Anexo C) lista sólo las herramientas conocidas por el script: si alguien del grupo usó
+  otra herramienta o versión, hay que agregar su fila y firmar (política ING 2026, Anexo 1).
 - El commit: la primera página cita el commit actual. Si dice "+ cambios sin commit", hay que hacer el commit y volver
   a correr el paso 4.

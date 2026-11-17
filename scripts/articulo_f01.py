@@ -5,9 +5,10 @@ Uso, desde la raíz del repositorio y después de correr los estudios (ver docs/
     python scripts/articulo_f01.py          # docs/articulo_f01/Articulo_F01_Grupo4.docx + figuras + IFC del plan
     python scripts/articulo_f01.py --pdf    # además lo exporta a PDF con Word (Windows) y cuenta las páginas
 
-Todo número del artículo sale de los resultados (resultados/estudio_era5, confiabilidad_era5, estres_era5,
-retiro_tubos_era5, retiro_tubos2_era5, sensibilidad_era5, verificacion_ensemble): si se vuelven a correr los estudios, basta con volver
-a correr este script. La propuesta es el primer plan de config/confiabilidad_era5.yaml.
+Todo número del artículo sale de los resultados (resultados/estudio_era5, confiabilidad_r3, confiabilidad_era5,
+estres_era5, retiro_tubos_era5, retiro_tubos2_era5, retiro_tubos3_era5, sensibilidad_era5, verificacion_ensemble): si
+se vuelven a correr los estudios, basta con volver a correr este script. La propuesta es el primer plan de
+config/confiabilidad_r3.yaml; la anterior, el de config/confiabilidad_era5.yaml.
 """
 
 from __future__ import annotations
@@ -39,7 +40,9 @@ RES = RAIZ / "resultados"
 SALIDA = RAIZ / "docs" / "articulo_f01"
 IMG = SALIDA / "img"
 DOCX = SALIDA / "Articulo_F01_Grupo4.docx"
-PROPUESTA = cargar_estudio(RAIZ / "config" / "confiabilidad_era5.yaml")["planes"][0]["nombre"]
+# La propuesta es el primer plan de CONF_PROP; CONF_ANT guarda la propuesta anterior (descartada con malla fina).
+CONF_PROP, CONF_ANT = "confiabilidad_r3", "confiabilidad_era5"
+PROPUESTA = cargar_estudio(RAIZ / "config" / f"{CONF_PROP}.yaml")["planes"][0]["nombre"]
 LIM_T, LIM_D = 70.0, 20.0
 RHO_CP = 2400 * 970  # J/m3K, el del modelo (Ju y Lei 2019)
 
@@ -1011,10 +1014,11 @@ ETIQUETAS = {
     "unica-M10-T12-N25": ("Tubos en el núcleo (14 d), colocación a 12 °C", "12", "10 cm", "V3–V5, 25 °C, 14 d"),
     "unica-M10-T14-N25": ("Tubos en el núcleo (14 d), colocación a 14 °C", "14", "10 cm", "V3–V5, 25 °C, 14 d"),
     "unica-M10-T16-N25": ("Tubos en el núcleo (14 d), colocación a 16 °C", "16", "10 cm", "V3–V5, 25 °C, 14 d"),
+    "unica-M10-T10-N25-R28": ("Propuesta anterior (10 °C, retiro el día 28)", "10", "10 cm", "V3–V5, programa"),
     "5V-M10-T10-A25-e12": ("5 vertidas, esperas de 12 h (más lenta)", "10", "10 cm", "V1–V5, 25 °C, 14 d"),
     "5V-M10-T10-A25-e24": ("5 vertidas, esperas de 24 h (más lenta)", "10", "10 cm", "V1–V5, 25 °C, 14 d"),
 }
-RONDAS_RETIRO = ("retiro_tubos_era5", "retiro_tubos2_era5")
+RONDAS_RETIRO = ("retiro_tubos_era5", "retiro_tubos2_era5", "retiro_tubos3_era5")
 DIAS = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
 MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre",
          "noviembre", "diciembre"]
@@ -1117,11 +1121,11 @@ def preparar() -> dict:
     """Lee resultados, calcula las métricas y dibuja las figuras (una sola vez)."""
     IMG.mkdir(parents=True, exist_ok=True)
     X = {}
-    cfg_fin = cargar_estudio(RAIZ / "config" / "confiabilidad_era5.yaml")
+    cfg_fin = cargar_estudio(RAIZ / "config" / f"{CONF_PROP}.yaml")
     X["prop"] = cfg_fin["planes"][0]["nombre"]
     X["prop_cfg"] = cfg_fin["planes"][0]
     X["t0"] = datetime.fromisoformat(cfg_fin["t0"])
-    dirs = {k: RES / v for k, v in (("fam", "estudio_era5"), ("conf", "confiabilidad_era5"), ("est", "estres_era5"),
+    dirs = {k: RES / v for k, v in (("fam", "estudio_era5"), ("conf", CONF_PROP), ("ant", CONF_ANT), ("est", "estres_era5"),
                                      ("var", "sensibilidad_era5"),
                                      ("ver", "verificacion_ensemble"))}
     X["dirs"] = dirs
@@ -1138,26 +1142,47 @@ def preparar() -> dict:
     # Corrección de malla: la mayor diferencia (0,11 m - 0,275 m) de M_Δ en los escenarios de la propuesta verificados
     # con malla fina, medida sobre todo el horizonte (incluye el retiro).
     X["sens"] = sensibilidades([dirs["conf"]], {dirs["conf"]: filas["conf"]})
-    deltas = [s_["delta"] for s_ in X["sens"] if s_["plan"] == prop]
+    X["prop_ant"] = prop_ant = cargar_estudio(RAIZ / "config" / f"{CONF_ANT}.yaml")["planes"][0]["nombre"]
+    X["sens_ant"] = [s_ for s_ in sensibilidades([dirs["ant"]], {dirs["ant"]: filas["ant"]}) if s_["plan"] == prop_ant]
+    # δ es la mayor diferencia medida en TODAS las corridas con malla fina (propuesta actual y anterior): es un error
+    # del método numérico, no del plan, y así la regla no depende de qué escenarios se refinaron.
+    deltas = [s_["delta"] for s_ in X["sens"] if s_["plan"] == prop] + [s_["delta"] for s_ in X["sens_ant"]]
     X["delta"] = d = max(deltas) if deltas else 0.0
+    X["delta_ant_max"] = max((s_["delta"] for s_ in X["sens_ant"]), default=float("nan"))
+    if X["sens_ant"] and prop_ant != prop:
+        pa = max(X["sens_ant"], key=lambda s_: s_["delta"])
+        X["delta_ant_txt"] = (f"{pa['curva']} {pa['clima'].split('_')[-1]}, el mayor de sus "
+                              f"{len(X['sens_ant'])} escenarios con malla fina")
+    if prop_ant != prop and filas["ant"]:
+        finos_ant = {(s_["plan"], s_["curva"], s_["clima"]): s_["MD_fina"] for s_ in X["sens_ant"]}
+        X["C_ant"] = confiabilidad(corregir(filas["ant"], d, finos_ant), prop_ant)
+    else:
+        X["C_ant"] = {}
     finos = {(s_["plan"], s_["curva"], s_["clima"]): s_["MD_fina"] for s_ in X["sens"]}
     c = {k: corregir(v, d, finos if k == "conf" else None) for k, v in filas.items()}
     X["tabla_delta"] = tabla_delta(filas["conf"], prop, d, finos)
     X["filas_c"] = c
-    X["fam"], X["fam_gruesa"] = resumir(c["fam"]), resumir(filas["fam"])
+    X["fam"] = {k: v for k, v in resumir(c["fam"]).items()
+                if v["n"] == max((u["n"] for u in resumir(c["fam"]).values()), default=0)}
+    X["fam_gruesa"] = {k: v for k, v in resumir(filas["fam"]).items() if k in X["fam"]}
     X["MT_familia"] = max((f["M_T"] for f in filas["fam"]), default=float("nan"))
     X["C"] = confiabilidad(c["conf"], prop)
     _cg = confiabilidad(corregir(filas["conf"], 0.0), prop)
     X["pf_gruesa"] = _cg["P_F"] if _cg else None
     X["solo_ss"] = resumen_pesos([f for f in c["conf"] if f["plan"] == prop], "SS")
-    X["est"] = resumir(c["est"]).get(prop, {})
-    X["var"] = resumir(c["var"])
-    X["ver"] = resumir(c["ver"]).get(prop, {})
+    # Un estudio a medio correr daría un P_f parcial: sólo se informan los planes con todos sus escenarios.
+    def completos(res):
+        n_max = max((v["n"] for v in res.values()), default=0)
+        return {k: v for k, v in res.items() if v["n"] == n_max}
+
+    X["est"] = completos(resumir(c["est"])).get(prop, {})
+    X["var"] = completos(resumir(c["var"]))
+    X["ver"] = completos(resumir(c["ver"])).get(prop, {})
     X["ret"] = resumir(c["ret"])
 
     print("Geometría, cronograma y clima...")
     X["vox"], X["geo"] = geometria()
-    X["inicios"], X["fines"], X["D"], _ = cronograma_vertidas(RAIZ / "config" / "confiabilidad_era5.yaml", prop)
+    X["inicios"], X["fines"], X["D"], _ = cronograma_vertidas(RAIZ / "config" / f"{CONF_PROP}.yaml", prop)
     X["retiro_h"] = retiro_de(X["prop_cfg"])
     X["t_ret"] = X["D"] + X["retiro_h"]
     X["ad"] = antes_despues(dirs["conf"], [f for f in filas["conf"] if f["plan"] == prop], X["t_ret"], d)
@@ -1256,7 +1281,7 @@ def preparar() -> dict:
     X["n_corridas"] = sum(len(v) for v in filas.values())
     # Tiempos medidos: suma de los segundos de cada corrida (un proceso cada una) y de las corridas con malla fina.
     X["horas_cpu"] = (sum(float(f["segundos"]) for v in filas.values() for f in v)
-                      + sum(x["segundos_fina"] for x in X["sens"])) / 3600
+                      + sum(x["segundos_fina"] for x in X["sens"] + X["sens_ant"])) / 3600
     finas_s = [x["segundos_fina"] for x in X["sens"] if abs(x["dx_fina"] - 0.11) < 1e-6]
     X["segundos_fina"] = float(np.median(finas_s)) if finas_s else float("nan")
     X["hw"] = hardware()
@@ -1302,8 +1327,10 @@ def _tabla_planes_familia(X):
     filas = []
     for p in orden:
         r = fam[p]
+        Tp = X["prop_cfg"].get("T_colocacion") if p == X["prop"] else None
         et, Tc, manta, tub = ETIQUETAS.get(p, ("**Propuesta final** (tubos hasta el retiro)" if p == X["prop"] else p,
-                                               "10", "10 cm", "V3–V5, programa"))
+                                               f1(float(Tp), 0) if Tp is not None else "—", "10 cm",
+                                               "V3–V5, programa"))
         filas.append([et, f1(r["D"]), Tc, manta, tub, pct(r["P_T"], 0), pct(r["P_D"], 0), pct(r["P_F"], 0),
                       "sí" if r["P_F"] <= 0.05 else "no"])
     return orden, filas
@@ -1334,6 +1361,11 @@ def escribir(W: Informe, X: dict, R: dict):
     ad, sens, mat, est = X["ad"], X["sens"], X["mat"], X["est"]
     tubo3 = next(t for t in pc["tubos"] if t["vertida"] == 3)
     H_geo = max(g["z1"] for g in geo)  # altura total de la geometría real (IFC)
+    Tb = f1(float(pc.get("T_colocacion", 10)), 0)  # máximo a la descarga = temperatura de colocación del plan
+    T_obj = float(pc.get("T_colocacion", 10)) - 2  # la planta apunta 2 °C bajo el máximo
+    # Hielo por m³: ρc·(T_mezcla − T_obj) / (L + c_agua·T_obj), con la mezcla sin hielo a 16–18 °C y ρc del modelo.
+    hielo = tuple(RHO_CP / 1000 * (Ts - T_obj) / (334 + 4.19 * T_obj) for Ts in (16.0, 18.0))
+    V_tot = sum(g["V"] for g in geo)
     prog = programa_texto(tubo3)
     cumple = bool(C) and C["P_F"] <= 0.05
     pf = C["P_F"] if C else float("nan")
@@ -1398,7 +1430,7 @@ def escribir(W: Informe, X: dict, R: dict):
         f"retiro, tubos de enfriamiento y clima horario. La incertidumbre se representa con 8 curvas de hidratación "
         f"medidas y 30 temporadas reales de reanálisis ERA5 alineadas al inicio del {fecha_larga(t0).split(',')[0]}; "
         f"la probabilidad de falla se obtiene por enumeración ponderada de escenarios. Con malla fina en los escenarios "
-        f"críticos (+{f1(d, 1)} °C en el resto), una vertida única continua de {f1(D)} h, con hormigón a 10 °C, manta de 10 cm y tubos en el "
+        f"críticos (+{f1(d, 1)} °C en el resto), una vertida única continua de {f1(D)} h, con hormigón a {Tb} °C, manta de 10 cm y tubos en el "
         f"núcleo que siguen enfriando hasta el retiro de la manta el día {f1(dia_ret, 0)} {frase_prop}. "
         + frase_retiro + " Se entrega el plan de control con sensores, umbrales y contingencias.")
     W.p("**Resumen.** " + resumen, alinear="justificado")
@@ -1590,8 +1622,8 @@ def escribir(W: Informe, X: dict, R: dict):
         par = W.p(linea, tam=8.5, despues=0)
         for r in par.runs:
             r.font.name = "Consolas"
-    n_finas = len(sens)
-    W.p(f"**Costo.** Todo se corrió en un computador portátil ({X['hw']}). Con Δx = 0,275 m el dominio tiene ≈100 mil "
+    n_finas = len(sens) + len(X["sens_ant"])
+    W.p(f"**Costo.** Las corridas se hicieron en computadores portátiles (el principal: {X['hw']}). Con Δx = 0,275 m el dominio tiene ≈100 mil "
         f"celdas y un escenario con retiro (≈{f1(t_ret / 24 + 7, 0)} días) toma una mediana de "
         f"{f1(X['segundos'], 0)} s en un proceso; con Δx = 0,11 m, {f1(X['segundos_fina'] / 60, 0)} min. Los "
         f"escenarios son independientes y se corren 6 en paralelo. Las {X['n_corridas']} simulaciones de los estudios "
@@ -1603,10 +1635,9 @@ def escribir(W: Informe, X: dict, R: dict):
         "porque la manta agrega resistencia; por eso el paso lo fija la precisión (600 s) y no la estabilidad. Con "
         "0,11 m el límite interior baja a ≈35 min, todavía sobre 600 s, y el costo crece con el número de celdas, "
         "(0,275/0,11)³ ≈ 15,6 veces. El paso de 600 s se verificó contra 300 s (sección 5).", alinear="justificado")
-    W.p("**Estudio.** Sobre el solver, un segundo algoritmo recorre los planes y escenarios. Cada simulación se "
-        "identifica por una firma que reúne el plan, la curva, el clima y todos los parámetros que la afectan; si la "
-        "firma ya está en la caché de resultados, no se repite. Así, agregar un plan o una temporada sólo simula lo "
-        "nuevo, y cambiar un parámetro invalida exactamente lo que depende de él:", alinear="justificado")
+    W.p("**Estudio.** Un segundo algoritmo recorre planes y escenarios. Cada simulación tiene una firma con el plan, "
+        "la curva, el clima y los parámetros que la afectan; si ya está en la caché, no se repite:",
+        alinear="justificado")
     for linea in ("para cada plan u declarado en el archivo de configuración:",
                   "     para cada curva m (p_m) y cada clima k (q_k):",
                   "          firma ← hash(u, m, k, parámetros que afectan); simular si no está en caché",
@@ -1642,9 +1673,16 @@ def escribir(W: Informe, X: dict, R: dict):
         f"bordes y el agua; en los {C['n'] if C else 0} escenarios de la propuesta es a lo más {X['residuo_txt']}, de "
         "modo que las diferencias entre planes son físicas y no numéricas. Como la métrica de diseño depende de un "
         "gradiente fuerte en los primeros centímetros bajo la cara, se mide además la sensibilidad a la malla, al paso "
-        "de tiempo y a la profundidad del punto frío en los escenarios que gobiernan las dos fases (el pico con la "
-        "manta puesta y el salto después del retiro)"
-        + (f" y, con malla fina, en los {len(criticos)} escenarios siguientes más cercanos al límite" if criticos else "")
+        "de tiempo y a la profundidad del punto frío "
+        + ("en los escenarios que gobiernan las dos fases (el pico con la manta puesta y el salto después del retiro)"
+           if len({x["t_MD_fina"] < t_ret for x in detalle}) == 2 else
+           "en el escenario de mayor M~Δ~ ("
+           + ("el pico con la manta puesta" if detalle and detalle[0]["t_MD_fina"] < t_ret else "el salto del retiro")
+           + ")")
+        + (f" y, sólo con malla fina, en los {len(criticos)} escenarios siguientes más cercanos al límite"
+           + (", entre ellos el de mayor M~Δ~ después del retiro"
+              if any(x["t_MD_fina"] >= t_ret for x in criticos) and all(x["t_MD_fina"] < t_ret for x in detalle)
+              else "") if criticos else "")
         + ".", alinear="justificado")
     if finas:
         def fase(x):
@@ -1665,7 +1703,11 @@ def escribir(W: Informe, X: dict, R: dict):
             filas += [["", "", dx_txt(float(r["dx"])), f1(float(r["dt_s"]), 0), f1(1000 * float(r["profundidad_m"]), 0),
                        f1(float(r["M_T"]), 2), f1(float(r["M_D"]), 2), ""] for r in x["otras"]]
         if detalle:
-            W.tabla("Sensibilidad numérica en los escenarios de la propuesta que gobiernan cada fase (todo el "
+            W.tabla("Sensibilidad numérica en "
+                    + ("los escenarios de la propuesta que gobiernan cada fase"
+                       if len({x["t_MD_fina"] < t_ret for x in detalle}) == 2 else
+                       "el escenario de la propuesta de mayor M~Δ~")
+                    + " (todo el "
                     "horizonte, incluido el retiro): malla, paso de tiempo y profundidad de T~mín~, por separado. La "
                     "fase es la del instante de M~Δ~; δ es la diferencia con la malla de 0,275 m.",
                     ["Escenario", "Fase", "Δx [m]", "Δt [s]", "Prof. [mm]", "M~T~ [°C]", "M~Δ~ [°C]", "δ [°C]"], filas,
@@ -1707,17 +1749,20 @@ def escribir(W: Informe, X: dict, R: dict):
             filas = [[f"{x['curva']} {x['clima'].split('_')[-1]}", fase(x), f1(x["MD_gruesa"], 2),
                       f1(x["MD_gruesa"] + d, 2), f1(x["MD_fina"], 2), f"+{f1(x['delta'], 2)}",
                       "sí" if x["MD_fina"] > LIM_D else "no"] for x in criticos]
-            W.tabla(f"Malla de {dxc} m en los escenarios de la propuesta más cercanos al límite, además de los que "
-                    f"gobiernan cada fase: M~Δ~ con la malla del estudio, con la corrección uniforme "
+            W.tabla(f"Malla de {dxc} m en los escenarios de la propuesta más cercanos al límite, además de los de "
+                    f"la Tabla {ref('t:malla')}: M~Δ~ con la malla del estudio, con la corrección uniforme "
                     f"(+{f1(d, 2)} °C) y con la malla fina.",
                     ["Escenario", "Fase", "M~Δ~ 0,275 m", "+ δ", f"M~Δ~ {dxc} m", "δ [°C]", "¿> 20 °C?"], filas,
                     [2.6, 2.8, 2.0, 1.6, 2.0, 1.6, 1.8], alinear=["l", "l"] + ["c"] * 5, tam=7.5, ref="malla2")
         ks = sum(1 for x in finas if x["MD_fina"] > LIM_D)
         ds = [x["delta"] for x in finas]
         W.p(f"En los {len(finas)} escenarios corridos con malla fina, δ va de {f1(min(ds), 2)} a {f1(max(ds), 2)} °C y "
-            f"{ks} de ellos superan 20 °C. Por eso **en esos escenarios se usa directamente M~Δ~ de la malla fina, y "
-            f"a los demás se les suma δ = {f1(d, 2)} °C**, la mayor diferencia medida, antes de compararlos con "
-            "20 °C.", alinear="justificado")
+            + ("ninguno supera 20 °C" if ks == 0 else f"{ks} superan 20 °C") + ". Por eso **en esos escenarios se usa "
+            f"directamente M~Δ~ de la malla fina, y a los demás se les suma δ = {f1(d, 2)} °C** antes de compararlos "
+            "con 20 °C: la mayor diferencia medida en todas las corridas con malla fina"
+            + (f", que se dio en la propuesta anterior ({X['delta_ant_txt']}). Se usa la mayor porque es un error del "
+               "método numérico y no del plan" if X.get("delta_ant_txt") and X["delta_ant_max"] > max(ds) + 1e-9
+               else "") + ".", alinear="justificado")
         td = X.get("tabla_delta") or {}
         if td:
             filas = [[f1(r["delta"], 2) + (" (medida)" if abs(r["delta"] - round(d, 2)) < 1e-9 else ""),
@@ -1793,12 +1838,11 @@ def escribir(W: Informe, X: dict, R: dict):
         "(forma de la distribución, correlaciones) que los datos no permiten verificar, y su cola, que es lo que "
         "importa para P~f~ ≤ 5 %, sería sobre todo una extrapolación. Lo que queda fuera de ese conjunto se trata con "
         "sensibilidades.", alinear="justificado")
-    W.p("**Margen frente al material.** Como sólo hay 8 curvas, un hormigón de obra más exotérmico que todas ellas no "
-        "está representado. Para medir cuánto margen hay, se repite la propuesta con las curvas escaladas en +20 % "
-        "(la diferencia entre la inversión con β = 2,5 y 3,0 W/m²K) y se ajusta, para las curvas SS, el peor M~Δ~ "
-        "contra la energía liberada a 14 días. La energía con la que esa recta llega a 20 °C es E~crít~: una cota "
-        "determinista que se compara con la probeta más exotérmica y que se controla en obra con los sensores de las "
-        "primeras 48 h.", alinear="justificado")
+    W.p("**Margen frente al material.** Un hormigón más exotérmico que las 8 curvas no está representado. Para medir "
+        "el margen se repite la propuesta con las curvas escaladas en +20 % (la diferencia entre β = 2,5 y 3,0 W/m²K) "
+        "y se ajusta, para las curvas SS, el peor M~Δ~ contra la energía a 14 días: la energía con la que esa recta "
+        "llega a 20 °C es E~crít~, una cota determinista que se controla con los sensores de las primeras 48 h.",
+        alinear="justificado")
 
     # ---------------- 7. Resultados
     W.h1("7. Resultados")
@@ -1835,7 +1879,7 @@ def escribir(W: Informe, X: dict, R: dict):
                f"{f1(min(v['antes_max'] for v in fr.values()))}–{f1(max(v['antes_max'] for v in fr.values()))} °C, y "
                f"después del retiro, {f1(min(v['despues_max'] for v in fr.values()))}–"
                f"{f1(max(v['despues_max'] for v in fr.values()))} °C. " if fr else "")
-            + (f"En {len(fr_gob)} de ellos ({', '.join(sorted(fr_gob))}) el peor diferencial aparece después del retiro: "
+            + (f"En {len(fr_gob)} de ellos el peor diferencial aparece después del retiro: "
                f"el núcleo sigue a {nuc_txt} al retirar la manta y la superficie cae hacia el aire nocturno. "
                if fr_gob else "")
             + (f"En los otros {len(fr) - len(fr_gob)} el máximo ocurre antes, durante el pico de la primera semana. "
@@ -1855,18 +1899,28 @@ def escribir(W: Informe, X: dict, R: dict):
                       + (" + V1–V2" if any(t["vertida"] in (1, 2) for t in p["tubos"]) else ""),
                       f1(a.get("antes_max")), f1(a.get("despues_max")), pct(r["P_F"], 0), f1(r["peor"]["dT_agua_max"], 1)])
     if filas:
-        W.tabla("Exploración del retiro en dos rondas (R1, R2), cada una declarada antes de ver sus resultados; curvas "
-                "SS × 3 terciles = 12 escenarios por variante. M~Δ~ máximo antes y después del retiro y P~f~, con la "
-                "corrección de malla, y diferencia máxima hormigón–agua [°C].",
+        escs = []
+        for n_r, r in enumerate(X["rondas"], start=1):
+            cr = cargar_estudio(RAIZ / "config" / f"{r}.yaml")
+            cur = cr["curvas"].get("usar")
+            cl = cr["clima"]
+            n_cur = len(cur) if isinstance(cur, list) else 8
+            if cl.get("temporadas"):
+                escs.append(f"R{n_r}: {n_cur} curvas × las temporadas {', '.join(map(str, cl['temporadas']))}")
+            else:
+                escs.append(f"R{n_r}: {n_cur} curvas × {cl.get('historias', 3)} terciles")
+        W.tabla(f"Exploración del retiro en {len(X['rondas'])} rondas, cada una declarada antes de ver sus resultados "
+                f"({'; '.join(escs)}; 12 escenarios por variante, con el mismo peso). M~Δ~ máximo antes y después del "
+                "retiro y P~f~ de ese filtro, con la corrección de malla, y diferencia máxima hormigón–agua [°C].",
                 ["Variante", "Retiro", "Agua V3–V5 [°C]", "M~Δ~ antes", "M~Δ~ después", "P~f~", "ΔT agua"], filas,
                 [4.6, 1.6, 3.4, 1.7, 1.9, 1.3, 1.6], alinear=["l", "c", "c", "c", "c", "c", "c"], tam=7.5, ref="retiro")
         if "retiro" in figs:
             W.figura(figs["retiro"], "ΔT(t) en el peor escenario de cada variante de retiro, un panel por ronda (malla "
                                      "del estudio); las líneas verticales marcan cada retiro.", ref="retiro")
     W.p("Lo que controla el salto es la diferencia entre el núcleo y la mínima nocturna del aire al momento del "
-        "retiro: bajo 10 cm de manta el núcleo se enfría muy lento, de modo que retirar más tarde sin seguir enfriando "
-        "ayuda poco. Mantener los tubos del núcleo con agua cada vez más fría después del pico baja esa diferencia "
-        "antes de retirar, siempre que el agua no enfríe de más el hormigón junto a las caras.", alinear="justificado")
+        "retiro: bajo 10 cm de manta el núcleo se enfría muy lento, y mantener los tubos del núcleo funcionando hasta "
+        "el retiro baja esa diferencia, siempre que el agua no enfríe de más el hormigón junto a las caras.",
+        alinear="justificado")
     if X["ret"]:
         ok = [n for n in X["ret_cfg"] if n in X["ret"] and X["ret"][n]["P_F"] <= 0.05]
         # Variante con el mayor M_Δ antes del retiro entre las que enfrían sólo el núcleo (V3-V5).
@@ -1884,9 +1938,45 @@ def escribir(W: Informe, X: dict, R: dict):
                     f"{f1(X['ret_ad'][a_max]['antes_max'])} °C, porque el agua fría enfría la zona junto a la cara "
                     "inclinada de V4 mientras el núcleo sigue caliente. ")
         txt += ("La segunda ronda mantuvo por eso el agua a 25 °C hasta los días 10 a 14, pasado el pico, y recién "
-                "entonces la bajó por tramos. La propuesta final es la variante de esa ronda con el mayor margen, evaluada luego "
-                "con las 8 curvas y las 30 temporadas.")
+                "entonces la bajó por tramos.")
+        Ca = X.get("C_ant") or {}
+        if Ca and X["prop_ant"] != prop:
+            txt += (f" Su mejor variante, evaluada con las 8 curvas y las {len(Ca['anios'])} temporadas, cumplía con la "
+                    f"malla del estudio, pero con la malla fina el salto del retiro subió hasta "
+                    f"{f1(X['delta_ant_max'], 2)} °C más y P~f~ quedó en {pct(Ca['P_F'])}: no cumple.")
         W.p(txt, alinear="justificado")
+        r3 = [n for n in X["ret_cfg"] if X["ronda_de"][n] == len(X["rondas"]) and n in X["ret"]]
+        if Ca and len(r3) > 1:
+            def _ultimo_agua(n):
+                pr = next((t.get("programa") for t in X["ret_cfg"][n]["tubos"] if t.get("programa")), None) or [{}]
+                return pr[-1].get("T_agua_C")
+
+            def _par(clave):  # variantes iguales salvo en `clave`: efecto de esa palanca sobre el peor M_Δ
+                otras = {"T": lambda n: X["ret_cfg"][n].get("T_colocacion"), "agua": _ultimo_agua,
+                         "retiro": lambda n: retiro_de(X["ret_cfg"][n])}
+                for a in r3:
+                    for b in r3:
+                        if a < b and otras[clave](a) != otras[clave](b) and all(
+                                f(a) == f(b) for k, f in otras.items() if k != clave):
+                            return (a, b) if otras[clave](a) > otras[clave](b) else (b, a)
+                return None
+
+            partes7 = []
+            for clave, txt_ in (("T", "colocar más frío"), ("agua", "bajar el agua del último tramo"),
+                                ("retiro", "retirar más tarde")):
+                par = _par(clave)
+                if par:
+                    alto, bajo = par
+                    m_a, m_b = X["ret"][alto]["MD_max"], X["ret"][bajo]["MD_max"]
+                    if clave == "retiro":
+                        alto, bajo, m_a, m_b = bajo, alto, m_b, m_a  # el "cambio" es retirar más tarde
+                    partes7.append(f"{txt_} {'baja' if m_b < m_a else 'sube'} el peor M~Δ~ de {f1(m_a)} a {f1(m_b)} °C")
+            mejor = min(r3, key=lambda n: X["ret"][n]["MD_max"])
+            W.p("La tercera ronda se declaró después de ver ese resultado y se filtró en los escenarios que fallaban. "
+                + ("En ella, " + "; ".join(partes7) + ". " if partes7 else "")
+                + f"La de menor M~Δ~ es {mejor} ({X['ret_cfg'][mejor].get('descripcion', '').replace(' -> ', ' → ')}), "
+                + ("que es la propuesta final" if mejor == prop else f"y la propuesta final es {prop}")
+                + ", evaluada luego con las 8 curvas y las 30 temporadas.", alinear="justificado")
     W.h2("7.3 Confiabilidad de la propuesta final")
     if C:
         pe = C["peor"]
@@ -1916,11 +2006,15 @@ def escribir(W: Informe, X: dict, R: dict):
         fila_pe = C["MD"][i_pe]
         orden_t = np.argsort(fila_pe)[::-1]
         peores_t = ", ".join(C["anios"][j].split("_")[-1] for j in orden_t[:3])
-        W.p(f"Después del retiro, en cambio, la temporada sí importa. Con la manta puesta el mayor diferencial es "
-            f"{f1(ad['antes_max'])} °C y después del retiro llega a {f1(ad['despues_max'])} °C: el salto lo decide la "
-            f"noche más fría de los días que siguen al retiro. Con la curva {pe['curva']}, M~Δ~ va de "
+        W.p((f"Después del retiro, en cambio, la temporada sí importa. Con la manta puesta el mayor diferencial es "
+             f"{f1(ad['antes_max'])} °C y después del retiro llega a {f1(ad['despues_max'])} °C: el salto lo decide la "
+             f"noche más fría de los días que siguen al retiro. " if ad["despues_max"] > ad["antes_max"] else
+             f"Con la manta puesta el mayor diferencial es {f1(ad['antes_max'])} °C y después del retiro, "
+             f"{f1(ad['despues_max'])} °C: retirando el día {f1(dia_ret, 0)}, con el núcleo ya frío, el retiro deja de "
+             "gobernar y manda el pico de los primeros días. ")
+            + f"Con la curva {pe['curva']}, M~Δ~ va de "
             f"{f1(np.nanmin(fila_pe))} a {f1(np.nanmax(fila_pe))} °C según la temporada, y las más exigentes son "
-            f"{peores_t}. Por eso el plan no fija una fecha rígida: el retiro se condiciona a lo que miden los sensores "
+            f"{peores_t}. El plan no fija una fecha rígida: el retiro se condiciona a lo que miden los sensores "
             "y al pronóstico de las mínimas (sección 8.3). "
             + (f"Las curvas 22A, que liberan menos calor y lo hacen antes, llegan a lo más a {f1(md22)} °C; el riesgo se "
                f"concentra en las SS. " if math.isfinite(md22) else "")
@@ -1945,8 +2039,11 @@ def escribir(W: Informe, X: dict, R: dict):
     if prop in fam:
         filas.append(["Propuesta con 3 terciles (referencia de las filas siguientes)", pct(fam[prop]["P_F"]),
                       f1(fam[prop]["MD_max"])])
+    T_base = float(X["prop_cfg"].get("T_colocacion", 10))
+    var_T = sorted(((int(m.group(1)), n) for n in X["var"] for m in [re.fullmatch(re.escape(prop) + r"-T(\d+)", n)]
+                    if m), key=lambda x: x[0])
     for nombre, etiq in ((f"{prop}-rhocp", "ρc~p~ de las probetas (2,53 MJ/m³K)"),
-                         (f"{prop}-T8", "Colocación a 8 °C"), (f"{prop}-T12", "Colocación a 12 °C"),
+                         *((n, f"Colocación a {T} °C") for T, n in var_T),
                          (f"{prop}-mantaR20", "Manta con R = 2,0 m²K/W (húmeda o de menor rendimiento)"),
                          (f"{prop}-mantaR30", "Manta con R = 3,0 m²K/W")):
         if nombre in X["var"]:
@@ -1972,14 +2069,15 @@ def escribir(W: Informe, X: dict, R: dict):
         partes.append(f"Con el ρc~p~ de las probetas, el mismo calor sube menos la temperatura y M~Δ~ máximo queda en "
                       f"{f1(rc['MD_max'])} °C (P~f~ = {pct(rc['P_F'])}), lo que confirma que el valor del modelo es el "
                       "lado conservador.")
-    t8, t12 = X["var"].get(f"{prop}-T8"), X["var"].get(f"{prop}-T12")
-    if t8 and t12:
-        partes.append(f"Colocar a 8 °C da M~Δ~ máximo de {f1(t8['MD_max'])} °C y a 12 °C, de {f1(t12['MD_max'])} °C "
-                      f"(P~f~ = {pct(t8['P_F'])} y {pct(t12['P_F'])}): "
-                      + ("un camión algo más tibio que lo especificado no cambia la conclusión, pero sí reduce el margen; "
-                         "por eso el límite de 10 °C a la descarga se controla camión a camión." if t12["P_F"] <= 0.05 else
-                         "con hormigón a 12 °C el plan ya no cumple, de modo que el límite de 10 °C a la descarga es "
-                         "obligatorio y se controla camión a camión."))
+    if var_T:
+        vs = [(T, X["var"][n]) for T, n in var_T]
+        falla = next((T for T, r in vs if T > T_base and r["P_F"] > 0.05), None)
+        txts = [f"a {T} °C da M~Δ~ máximo de {f1(r['MD_max'])} °C (P~f~ = {pct(r['P_F'])})" for T, r in vs]
+        partes.append("Colocar " + (", ".join(txts[:-1]) + " y " + txts[-1] if len(txts) > 1 else txts[0]) + ": "
+                      + (f"con hormigón a {falla} °C el plan ya no cumple, de modo que el límite de {f1(T_base, 0)} °C "
+                         "a la descarga es obligatorio y se controla camión a camión." if falla is not None else
+                         "un camión algo más tibio que lo especificado no cambia la conclusión, pero sí reduce el margen; "
+                         f"por eso el límite de {f1(T_base, 0)} °C a la descarga se controla camión a camión."))
     r20, r30 = X["var"].get(f"{prop}-mantaR20"), X["var"].get(f"{prop}-mantaR30")
     if r20 and r30:
         b = fam.get(prop)
@@ -2031,9 +2129,11 @@ def escribir(W: Informe, X: dict, R: dict):
     W.p("**Mecanismo.** Ninguna medida basta sola. La manta desacopla la superficie del aire; el preenfriado baja el "
         "pico del núcleo; los tubos con agua tibia sólo en el núcleo (V3–V5) recortan el pico sin enfriar el anillo "
         "exterior de la losa, que es la zona más fría. El punto frío del período protegido aparece donde el serpentín de "
-        "V4 se acerca a la cara inclinada, y el del retiro, en las caras que quedan expuestas a la noche. La fase "
-        "crítica es el retiro: por eso los tubos siguen funcionando, con agua cada vez más fría, hasta que la manta se "
-        "retira.", alinear="justificado")
+        "V4 se acerca a la cara inclinada, y el del retiro, en las caras que quedan expuestas a la noche. "
+        + ("La fase crítica es el retiro: por eso los tubos siguen funcionando hasta que la manta se retira."
+           if ad and ad["despues_max"] > ad["antes_max"] else
+           f"El retiro, que gobernaba los planes anteriores, deja de ser crítico cuando se hace el día "
+           f"{f1(dia_ret, 0)} con los tubos funcionando hasta entonces."), alinear="justificado")
     W.p("**Comparación.** Ju y Lei (2019) midieron, sin control térmico, un diferencial de ≈35 °C en una losa de "
         f"espesor parecido; el plan propuesto lo mantiene bajo 20 °C en "
         f"{'todos los' if C and C['k_F'] == 0 else 'casi todos los' if cumple else f'el {pct(1 - pf, 0)} de los'} "
@@ -2047,7 +2147,8 @@ def escribir(W: Informe, X: dict, R: dict):
         "práctica de obra.", alinear="justificado")
     W.p("**Factibilidad.** Todo el plan usa equipos corrientes: hielo en escamas en la planta, mantas de obra, tubos "
         "HDPE como los de riego, un estanque y un enfriador del tamaño de los que se arriendan para obras. El costo "
-        "principal es la operación del circuito de agua durante cuatro semanas, con turnos de revisión y energía de "
+        "principal es la operación del circuito de agua durante "
+        f"{f1(max(t['hasta_h'] for t in tubo3['programa']) / 24, 0)} días, con turnos de revisión y energía de "
         "respaldo, y el de mantener la manta en buen estado, sellada en los bordes, todo ese tiempo. A cambio, la "
         "colocación se hace en un solo día, sin juntas frías, que es la opción más rápida posible con una bomba.",
         alinear="justificado")
@@ -2077,8 +2178,10 @@ def escribir(W: Informe, X: dict, R: dict):
     W.vinetas([
         "**Colocación:** continua, de día y de noche, con dos turnos, iluminación y una bomba de respaldo; capas de "
         "≤ 0,5 m vibradas. Una interrupción larga equivale a las variantes con esperas, que no cumplen.",
-        "**Temperatura de colocación:** máximo 10 °C a la descarga, medida en cada camión; la planta apunta a 8 °C con "
-        "hielo en escamas (≈50–62 kg/m³ según un balance de energía, ≈32–40 t en total), agua fría y áridos a la sombra.",
+        f"**Temperatura de colocación:** máximo {Tb} °C a la descarga, medida en cada camión; la planta apunta a "
+        f"{f1(T_obj, 0)} °C con hielo en escamas (≈{f1(hielo[0], 0)}–{f1(hielo[1], 0)} kg/m³ según un balance de "
+        f"energía con los materiales a 16–18 °C, ≈{f1(hielo[0] * V_tot / 1000, 0)}–{f1(hielo[1] * V_tot / 1000, 0)} t "
+        "en total), agua fría y áridos a la sombra.",
         "**Moldaje y manta:** terciado de 18 mm en las caras verticales de V1, V2 y V5; manta de 10 cm con film de "
         "polietileno (curado y protección contra la lluvia) en todas las caras, a medida que sube el hormigón; se "
         f"retiran el **día {f1(dia_ret, 0)}**, de día, sólo si se cumple el criterio de la sección 8.3.",
@@ -2100,7 +2203,7 @@ def escribir(W: Informe, X: dict, R: dict):
             "Un ingeniero de control térmico, con un reemplazo designado para cada turno, revisa los registros dos veces "
             "al día, los compara con la curva prevista, activa las contingencias de la Tabla "
             f"{ref('t:contingencias')} y firma el criterio de retiro. El laboratorista mide la temperatura de cada camión "
-            "a la descarga y lo rechaza si supera 10 °C. El operador del circuito de agua registra caudales y "
+            f"a la descarga y lo rechaza si supera {Tb} °C. El operador del circuito de agua registra caudales y "
             "temperaturas en cada cambio de tramo, y el instalador de los sensores verifica su lectura antes de la "
             "primera colocación.", alinear="justificado")
         if "sens" in figs:
@@ -2120,11 +2223,15 @@ def escribir(W: Informe, X: dict, R: dict):
             f"ΔT medido ≤ {math.floor(cr['dT_max'] + d)} °C y núcleo − mínima del aire prevista para los 3 días "
             f"siguientes ≤ {math.floor(cr['nucleo_aire_max'])} °C. Si no se cumplen, el agua sigue en su último tramo y "
             "se evalúa de nuevo cada 2 días.", alinear="justificado")
-    t12 = X["var"].get(f"{prop}-T12")
-    txt12 = ("colocar a 12 °C reduce el margen" if t12 is None or t12["P_F"] <= 0.05 else
-             f"a 12 °C, P~f~ = {pct(t12['P_F'])}")
+    mas_tibios = [(T, X["var"][n]) for T, n in var_T if T > T_base]
+    if mas_tibios:
+        T_f, r_f = next(((T, r) for T, r in mas_tibios if r["P_F"] > 0.05), mas_tibios[-1])
+        txt12 = (f"a {T_f} °C, P~f~ = {pct(r_f['P_F'])}" if r_f["P_F"] > 0.05 else
+                 f"colocar a {T_f} °C reduce el margen")
+    else:
+        txt12 = "la temperatura de colocación mueve el pico"
     filas = [
-        ["Hormigón a la descarga > 10 °C", "Se rechaza el camión o se ajusta el hielo en planta.",
+        [f"Hormigón a la descarga > {Tb} °C", "Se rechaza el camión o se ajusta el hielo en planta.",
          f"{txt12} (Tabla {ref('t:sensib')})"],
         ["Falla de la bomba de hormigón o de la planta", "Bomba de respaldo; la interrupción no debe pasar de 2 h; si pasa, "
          "se trata la junta y se reevalúa el plan.", "las esperas de 12–24 h no cumplen"],
@@ -2153,7 +2260,7 @@ def escribir(W: Informe, X: dict, R: dict):
         f"Con las 8 curvas medidas, la temperatura máxima nunca limita (M~T~ ≤ {f1(X['MT_familia'])} °C en todos los "
         "planes); el diseño lo gobierna el diferencial de 20 °C.",
         frase_retiro,
-        f"La propuesta final —vertida única de {f1(D)} h, hormigón a ≤ 10 °C, manta de 10 cm y tubos en V3–V5 con agua "
+        f"La propuesta final —vertida única de {f1(D)} h, hormigón a ≤ {Tb} °C, manta de 10 cm y tubos en V3–V5 con agua "
         f"a {prog}, retiro el día {f1(dia_ret, 0)}—, evaluada con malla fina en los {n_finas} escenarios que "
         f"gobiernan o están más cerca del límite y la corrección δ = {f1(d, 2)} °C en el resto, {frase_prop}.",
         ("**Condición de validez:** la conclusión se mantiene mientras el error de malla de los escenarios no refinados "
@@ -2168,7 +2275,7 @@ def escribir(W: Informe, X: dict, R: dict):
         "P~f~ es una enumeración exacta sobre las curvas medidas y las temporadas observadas, sin distribuciones "
         "supuestas" + (f"; con sólo la campaña SS resulta {pct(X['solo_ss']['P_F'])}" if X["solo_ss"] else "") + ".",
     ])
-    r20 = X["var"].get(f"{prop}-mantaR20")
+    r20, r30 = X["var"].get(f"{prop}-mantaR20"), X["var"].get(f"{prop}-mantaR30")
     W.p("**Lo pendiente o fuera del modelo:**", despues=2)
     W.vinetas([
         "Validación: no hay mediciones de esta fundación; el monitoreo (sección 8.2) compara lo medido con lo previsto "
@@ -2182,7 +2289,8 @@ def escribir(W: Informe, X: dict, R: dict):
         "Datos por confirmar: el origen temporal de las curvas (desfase de "
         f"{f1(X['curvas_ctl'].get('desfase_h', 2.0), 0)} h) y que la dosificación de la obra sea la de las probetas.",
         *([("Manta: entre R = 2,0 y 3,0 m²K/W el resultado casi no cambia (M~Δ~ máximo "
-            f"{f1(r20['MD_max'])} frente a {f1(fam[prop]['MD_max'])} °C con R = 2,5); igual se especifica R ≥ 2,5 m²K/W.")
+            f"{f1(r20['MD_max'])} °C con R = 2,0" + (f" y {f1(r30['MD_max'])} °C con R = 3,0" if r30 else "")
+            + f", frente a {f1(fam[prop]['MD_max'])} °C con R = 2,5); igual se especifica R ≥ 2,5 m²K/W.")
            if prop in fam and abs(r20["MD_max"] - fam[prop]["MD_max"]) < 0.5 else
            ("Manta: con R = 2,0 m²K/W la propuesta no cumple; R ≥ 2,5 m²K/W es un requisito que se controla en obra.")
            if r20["P_F"] > 0.05 else
@@ -2244,12 +2352,14 @@ def escribir(W: Informe, X: dict, R: dict):
                   "mcplan estudio config/estudio_era5.yaml            # familia de planes",
                   "mcplan estudio config/retiro_tubos_era5.yaml       # retiro: primera ronda",
                   "mcplan estudio config/retiro_tubos2_era5.yaml      # retiro: segunda ronda",
-                  "mcplan estudio config/confiabilidad_era5.yaml      # propuesta final: 8 curvas x 30 temporadas",
+                  f"mcplan estudio config/{CONF_ANT}.yaml      # propuesta anterior: 8 curvas x 30 temporadas",
+                  "mcplan estudio config/retiro_tubos3_era5.yaml      # retiro: tercera ronda (temporadas críticas)",
+                  f"mcplan estudio config/{CONF_PROP}.yaml --planes {prop}   # propuesta final: 8 x 30",
                   "mcplan estudio config/estres_era5.yaml             # +20 % de calor",
-                  "mcplan estudio config/sensibilidad_era5.yaml       # rho cp, 8 y 12 °C, R de la manta",
+                  "mcplan estudio config/sensibilidad_era5.yaml       # rho cp, colocación, R de la manta",
                   "mcplan estudio config/verificacion_ensemble.yaml   # clima del ensemble",
-                  "# malla fina (una línea por escenario):",
-                  *(f"mcplan estudio config/confiabilidad_era5.yaml --procesos 1 --sensibilidad {prop} {e}"
+                  "# malla fina de la propuesta (una línea por escenario; la de la anterior, en el LEEME):",
+                  *(f"mcplan estudio config/{CONF_PROP}.yaml --procesos 1 --sensibilidad {prop} {e}"
                     for e in finas_txt),
                   "python scripts/articulo_f01.py --pdf               # este artículo"):
         par = W.p(linea, tam=7.5, despues=0)
@@ -2291,7 +2401,7 @@ def ifc_del_plan(X: dict) -> Path:
     for v in range(1, 6):
         ini = X["inicios"][v - 1]
         valores[f"Vertida_0{v}"] = {
-            "VertidaID": v, "Inicio_h": round(ini, 2), "TemperaturaColocacion_C": 10.0, "TipoHormigon": "M1",
+            "VertidaID": v, "Inicio_h": round(ini, 2), "TemperaturaColocacion_C": float(X["prop_cfg"].get("T_colocacion", 10)), "TipoHormigon": "M1",
             "Moldaje": "Terciado fenólico 18 mm" if v in (1, 2, 5) else "Sin moldaje (cara inclinada)",
             "Aislacion": "Manta 10 cm (R = 2,5 m2K/W) con film, todas las caras expuestas",
             "RetiroMoldaje_h": round(X["t_ret"] - ini, 1)}

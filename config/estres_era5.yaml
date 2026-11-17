@@ -10,4 +10,4 @@ hereda: estudio_era5.yaml
 salida: ../resultados/estres_era5
 curvas:
   escala: 1.2
-planes: [unica-M10-T10-N25-R28]
+planes: [unica-M10-T10-N25-R28, r3-T8-A25-20-15-10-d32]

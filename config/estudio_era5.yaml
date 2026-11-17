@@ -1,0 +1,20 @@
+# Estudio de decisión con escenarios climáticos REALES (16 nov 2026). t0 = jueves 19 nov 2026, 08:00
+# (America/Santiago), heredado de config/estudio.yaml, como fija la pauta.
+#
+#   mcplan estudio config/estudio_era5.yaml        # familia de planes x 8 curvas x 3 historias
+#
+# Clima: las 30 temporadas reales 1996-2025 del reanálisis ERA5 (Open-Meteo Historical Weather API), alineadas al
+# 19 nov de cada año ("bloques históricos comparables"). Cada temporada es una historia completa, sin promediar; se
+# agrupan en terciles del índice de frío y cada tercil pesa 1/3. El ensemble ECMWF más reciente queda como
+# verificación de los primeros días (config/verificacion_ensemble.yaml).
+# Suelo inicial: climatología ERA5 de esos 30 años a la hora de inicio.
+# La evaluación llega hasta 7 días después del último retiro de protecciones (despues_ultimo_retiro_h).
+
+hereda: estudio.yaml
+salida: ../resultados/estudio_era5
+
+clima:
+  fuente: era5_bloques
+  climatologia: ../data/clima/snapshots/era5_1119_1996-2025_20261116T2119Z.json
+  historias: 3
+  suelo_inicial: climatologia

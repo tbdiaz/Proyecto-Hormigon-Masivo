@@ -1,0 +1,11 @@
+# Verificación de la propuesta final con el pronóstico más reciente: ensemble ECMWF IFS de 51 miembros para t0 =
+# jueves 19 nov 2026, 08:00, reducido a 3 terciles (peso 1/3), continuado con la climatología ERA5 donde termina.
+#
+#   mcplan clima ensemble
+#   mcplan estudio config/verificacion_ensemble.yaml
+
+hereda: estudio.yaml
+salida: ../resultados/verificacion_ensemble
+clima:
+  climatologia: ../data/clima/snapshots/era5_1119_1996-2025_20261116T2119Z.json
+planes: [unica-M10-T10-N25-R28]

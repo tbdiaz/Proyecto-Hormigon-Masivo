@@ -107,7 +107,13 @@ def preparar_escenarios(cfg, informar=print) -> dict:
     H14 = float(cfg.get("horizonte_h", 336))
     post = float(cfg.get("despues_ultima_colocacion_h", 240))
     # El clima cubre además una extensión de una semana por si algún máximo cae al final del horizonte.
-    horas = max([H14] + [cr["D_h"] + post for cr in cronos.values()]) + EXTENSION_H
+    # Con despues_ultimo_retiro_h, el horizonte llega hasta el último retiro de protecciones más ese margen: el
+    # diferencial que induce el retiro queda dentro de la evaluación. Para el clima basta una cota: el retiro se
+    # cuenta desde el fin de la colocación, que nunca pasa de D.
+    post_r = cfg.get("despues_ultimo_retiro_h")
+    horas = max([H14] + [cr["D_h"] + post for cr in cronos.values()]
+                + ([cronos[p.nombre]["D_h"] + _max_retiro(p.cubiertas) + float(post_r) for p in planes]
+                   if post_r is not None else [])) + EXTENSION_H
 
     cl = cfg["clima"]
     carpeta = Path(cfg["_caso"]).parent / "../data/clima/snapshots"
@@ -142,6 +148,8 @@ def preparar_escenarios(cfg, informar=print) -> dict:
     # agregar o quitar planes del YAML no obliga a repetir las corridas ya hechas.
     afecta = {k: cfg.get(k) for k in ("t0", "horizonte_h", "despues_ultima_colocacion_h", "guardar_cada_h", "dt_max_s",
                                       "profundidad_superficie_m", "T_colocacion")}
+    if post_r is not None:  # sólo si se usa, para no cambiar la firma de los estudios que no lo declaran
+        afecta["despues_ultimo_retiro_h"] = post_r
     afecta.update(recursos=cfg["recursos"], curvas={k: v for k, v in cfg["curvas"].items() if k != "archivo"},
                   clima=cfg["clima"])
     firma_base = hashlib.sha256("|".join([json.dumps(afecta, sort_keys=True, default=str),
@@ -213,7 +221,12 @@ def simular_tarea(tarea: dict, instantes_3d_h=()):
                    modelo=sup.get("modelo", "fisico"), clima=clima, absortividad=float(sup.get("absortividad", 0.65)),
                    emisividad=float(sup.get("emisividad", 0.9)))
     prof, Tz = np.array(tarea["suelo"]["prof"]), np.array(tarea["suelo"]["T"])
-    H = max(tarea["H14"], crono["D_h"] + tarea["post_h"]) + tarea.get("extra_h", 0.0)
+    H = max(tarea["H14"], crono["D_h"] + tarea["post_h"])
+    if tarea.get("post_retiro_h") is not None:  # hasta el último retiro de protecciones + el margen declarado
+        retiros = [t for t, _ in cubiertas.eventos(act.inicio_h, act.fin_h) if np.isfinite(t)]
+        if retiros:
+            H = max(H, max(retiros) + float(tarea["post_retiro_h"]))
+    H += tarea.get("extra_h", 0.0)
     res = simular_3d(dom, PlanVertidas(vox), caso.hormigon, caso.suelo, fuente, amb, H,
                      T_suelo_inicial=lambda z: np.interp(-np.asarray(z), prof, Tz), guardar_cada_h=tarea["guardar_h"],
                      dt_max_s=tarea["dt_s"], cubiertas=cubiertas, profundidad_tmin=tarea["profundidad"],
@@ -221,6 +234,18 @@ def simular_tarea(tarea: dict, instantes_3d_h=()):
                      materiales_vertida=caso.materiales_vertida(), tubos=circuitos)
     res.plan = act  # para las figuras: qué vertidas existen en cada instante según este plan
     return res, crono
+
+
+def _max_retiro(cubiertas: dict) -> float:
+    """Mayor retiro_h finito de las protecciones de un plan (0 si no hay retiros)."""
+    valores = []
+    for c in (cubiertas or {}).values():
+        r = c.get("retiro_h") if isinstance(c, dict) else None
+        if isinstance(r, (int, float)) and np.isfinite(r):
+            valores.append(float(r))
+        elif isinstance(r, dict):
+            valores += [float(x) for x in r.values() if isinstance(x, (int, float)) and np.isfinite(x)]
+    return max(valores, default=0.0)
 
 
 def _pico_al_final(res, ventana_h: float = 24.0) -> bool:
@@ -299,6 +324,7 @@ def tareas(cfg, esc, dx, planes=None) -> list[dict]:
                     "clima": _clima_dict(h["clima"]), "clima_clave": h["clave"], "p": esc["p_curva"][curva],
                     "q": h["peso"], "w": esc["p_curva"][curva] * h["peso"], "suelo": esc["suelo"],
                     "H14": esc["H14"], "post_h": float(cfg.get("despues_ultima_colocacion_h", 240)),
+                    "post_retiro_h": cfg.get("despues_ultimo_retiro_h"),
                     "guardar_h": float(cfg.get("guardar_cada_h", 1.0)), "dt_s": float(cfg.get("dt_max_s", 600)),
                     "profundidad": float(cfg.get("profundidad_superficie_m", 0.025)),
                     "firma": f"{esc['firma']}-{_firma_plan(plan)}-{dx:g}",

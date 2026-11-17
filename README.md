@@ -54,21 +54,23 @@ Todo se configura en [`config/estudio.yaml`](config/estudio.yaml) y los resultad
 `escenarios.csv` (una fila por plan y escenario), `resumen.md`, `resumen_planes.csv`, `definicion.json` y las figuras.
 Método y resultados: [docs/decision.md](docs/decision.md).
 
-## Informe final: Plan de Control de Temperatura
+## Artículo F01
 
-El informe final (Word y PDF) es [docs/informe_final/Plan_Control_Temperatura_G4.docx](docs/informe_final/). Usa
-como fecha el 19 nov **2025**, para tener clima real medido (30 temporadas ERA5) en todo el horizonte, y se arma
-desde los resultados con un solo script:
+El artículo (Word y PDF) está en [docs/articulo_f01/](docs/articulo_f01/). Usa t0 = jueves 19 nov 2026, 08:00,
+con las 30 temporadas ERA5 1996–2025 alineadas a esa fecha como escenarios climáticos, y evalúa cada plan hasta 7 días
+después del retiro de las protecciones. Se arma desde los resultados con un solo script:
 
 ```powershell
-mcplan estudio config/estudio_2025.yaml          # familia de planes con clima real (hereda de estudio.yaml)
-mcplan estudio config/confiabilidad_2025.yaml    # propuesta: 8 curvas x 30 temporadas reales
-mcplan estudio config/estres_2025.yaml           # +20 % de calor
-mcplan estudio config/retiro_2025.yaml           # retiro de protecciones (30 días)
-python scripts/informe_final.py --pdf            # el informe, sus figuras y el IFC del plan final
+mcplan estudio config/retiro_tubos_era5.yaml     # exploración del retiro con tubos extendidos
+mcplan estudio config/estudio_era5.yaml          # familia de planes (hereda de estudio.yaml)
+mcplan estudio config/confiabilidad_era5.yaml    # propuesta final: 8 curvas x 30 temporadas
+mcplan estudio config/estres_era5.yaml           # +20 % de calor
+mcplan estudio config/sensibilidad_era5.yaml     # rho cp de las probetas, 8 y 12 °C
+mcplan estudio config/verificacion_ensemble.yaml # clima del ensemble más reciente
+python scripts/articulo_f01.py --pdf             # el artículo, sus figuras y el IFC del plan final
 ```
 
-Pasos completos (malla fina, corrida de detalle, qué completar a mano): [docs/informe_final/LEEME.md](docs/informe_final/LEEME.md).
+Pasos completos (malla fina, corrida de detalle, qué completar a mano): [docs/articulo_f01/LEEME.md](docs/articulo_f01/LEEME.md).
 
 ## Editor sin terminal
 

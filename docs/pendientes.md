@@ -29,10 +29,11 @@ cambiar la conclusión, **baja** es de forma o de trazabilidad.
      terreno queda fuera.
    - Con protección, el punto que manda es el borde inferior de la losa (z ≈ 0,14 m), enfriado por el suelo frío
      de abajo. ¿Ese punto cuenta?
-9. **Prioridad alta. Horizonte y retiro de las mantas.** Los planes con protección dejan la manta hasta las
-   600 h, después del horizonte de evaluación (14 días y al menos 7 días tras la última colocación), y el retiro
-   se informa aparte. ¿Se acepta, o el retiro debe ocurrir dentro del horizonte? Retirarla de golpe a los 14 días
-   haría saltar el ΔT, porque el núcleo sigue a ~50 °C.
+9. **Prioridad alta. Retiro de las mantas dentro de la evaluación (resuelto en el modelo, 16 nov).** La pauta pide
+   no esconder picos fuera de la ventana: cada escenario se simula hasta 7 días después del último retiro
+   (`despues_ultimo_retiro_h`) y M_Δ cubre todo ese horizonte. Con los tubos apagados a los 14 días, el retiro
+   rompe todos los planes; la propuesta final mantiene los tubos del núcleo hasta el retiro, con agua cada vez más
+   fría. Queda preguntar en E13 si el profesor acepta ese criterio.
 
 ## 3. Recursos y controles admitidos (profesor)
 
@@ -52,11 +53,10 @@ cambiar la conclusión, **baja** es de forma o de trazabilidad.
 
 ## 4. Sitio y construcción (grupo)
 
-13. **Prioridad media. Fecha y hora de inicio.** Decisión del grupo (16 nov): el informe final usa
-    t0 = miércoles 19 nov **2025**, 08:00, para tener clima real medido (ERA5) en todo el horizonte
-    (`config/estudio_2025.yaml`, ver [docs/informe_final/LEEME.md](informe_final/LEEME.md)). Confirmar con el
-    profesor que acepta el cambio de año; si no, `config/estudio.yaml` corre la misma familia con el pronóstico para
-    la fecha de la defensa.
+13. **Fecha y hora de inicio (resuelto, 16 nov).** t0 = jueves 19 nov 2026, 08:00 (America/Santiago) en todas
+    las configuraciones, como fija la pauta. Los escenarios climáticos son las 30 temporadas ERA5 1996–2025
+    alineadas a esa fecha (`config/estudio_era5.yaml`), y el ensemble más reciente es la verificación de los
+    primeros días (`config/verificacion_ensemble.yaml`).
 14. **Prioridad media. Excavación:** ¿la fundación va enterrada? ¿A qué profundidad queda el terreno natural (se
     probó 3,3 m) y con qué sobreancho (1 m)? Cambia el abrigo del viento ([docs/excavacion.md](excavacion.md)).
 15. **Prioridad media. Relleno:** ¿cuándo se rellena y con qué? Recién puesto, el relleno frío empeora el ΔT

@@ -66,6 +66,17 @@ def test_agregar_propiedades_actualiza_sin_duplicar(ruta_ifc):
     assert nombres.count(PSET_VERTIDA) == 1
 
 
+def test_agregar_propiedades_no_vacia_el_diccionario_de_quien_llama(ruta_ifc):
+    """IfcOpenShell saca del diccionario las propiedades que ya existen; el de quien llama debe quedar intacto."""
+    valores = {"Vertida_02": {"Inicio_h": 3.5, "TemperaturaColocacion_C": 10.0, "Moldaje": "Terciado 18 mm"}}
+    copia = {k: dict(v) for k, v in valores.items()}
+    agregar_propiedades_curso(ruta_ifc, valores=valores)
+    assert valores == copia
+    v2 = next(v for v in leer_vertidas(ruta_ifc) if v.nombre == "Vertida_02")
+    assert v2.propiedades["Inicio_h"] == 3.5
+    assert v2.propiedades["Moldaje"] == "Terciado 18 mm"
+
+
 def test_detecta_cambio_de_propiedad_y_de_geometria(ruta_ifc):
     """Simula lo que se hace en Bonsai: editar una propiedad y mover el pedestal."""
     antes = resumir_ifc(ruta_ifc)

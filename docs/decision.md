@@ -1,14 +1,13 @@
 # Decisión probabilística del plan de vertidas (E13 / defensa F02) — Grupo 4, Litueche
 
-> **Informe final (16 nov 2026):** el Plan de Control de Temperatura está en
-> [docs/informe_final/](informe_final/). Usa el clima real de 2025 (30 temporadas ERA5) en vez del pronóstico de
-> este documento.
+> **Artículo F01 (17 nov 2026):** el estudio final está en [docs/articulo_f01/](articulo_f01/). Respecto de este
+> documento:
 >
-> - **Confirma la propuesta** `unica-M10-T10-N25`.
-> - **Ajusta la colocación:** máximo 10 °C a la descarga y meta de 8 °C en planta. Colocando a 12 °C, la malla fina
->   supera los 20 °C.
-> - **Corrige la malla:** suma +1,1 °C a todas las M_Δ.
-> - **Retiro de las protecciones:** gradual y condicionado a los sensores, desde el día 26.
+> - **Clima:** t0 sigue siendo el jueves 19 nov 2026. El clima de los escenarios son las 30 temporadas ERA5
+>   1996–2025 alineadas a esa fecha; el ensemble queda como verificación.
+> - **Retiro:** cada plan se evalúa hasta 7 días después del retiro de sus protecciones.
+> - **Propuesta:** mantiene los tubos del núcleo funcionando hasta el retiro.
+> - **Malla:** se suma la corrección de malla a todas las M_Δ.
 >
 > Este documento queda como registro del estudio con el pronóstico para la fecha de la defensa.
 

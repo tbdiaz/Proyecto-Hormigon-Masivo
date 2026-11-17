@@ -1,0 +1,122 @@
+# Retiro de las protecciones con tubos extendidos (familia declarada el 16 nov 2026, ANTES de ver resultados).
+#
+#   mcplan estudio config/retiro_tubos_era5.yaml     # exploración: 7 planes x 4 curvas SS x 3 terciles = 84 corridas
+#
+# Problema: la propuesta unica-M10-T10-N25 cumple mientras la manta está puesta, pero al retirarla el ΔT salta
+# sobre 20 °C, porque bajo la manta el núcleo sigue a ~34 °C (los tubos se apagan a los 14 días). Idea: seguir
+# enfriando el núcleo con los tubos de V3-V5 hasta el retiro, con agua cada vez más fría pero sólo después del pico
+# del diferencial (~día 6), y evaluar M_Δ hasta el último retiro + 7 días (despues_ultimo_retiro_h, en
+# estudio.yaml): el retiro queda dentro de la evaluación.
+#
+# Todos los planes: vertida única, colocación a 10 °C, manta de 10 cm en todas las caras y moldaje hasta el retiro.
+# El retiro se cuenta desde el fin de la colocación (23,6 h): retiro_h = 408 / 480 / 600 h = días 18 / 21 / 26 desde
+# t0. Las horas del programa del agua se cuentan desde que parte cada circuito (el inicio de su vertida).
+# El retiro escalonado (dos mantas de 5 cm) no se incluye: el estudio de Pablo mostró que gana <= 0,1 °C.
+# Exploración sólo con las curvas SS (las de más calor) y los 3 terciles; la variante elegida se evalúa después con
+# las 8 curvas y las 30 temporadas (config/confiabilidad_era5.yaml).
+
+hereda: estudio_era5.yaml
+salida: ../resultados/retiro_tubos_era5
+
+curvas:
+  usar: [M1_SS, M2_SS, M3_SS, M4_SS]
+
+planes:
+  # Referencia: la propuesta tal como estaba (tubos 14 días a 25 °C, retiro el día 26).
+  - nombre: retiro-d26-base
+    descripcion: propuesta anterior, tubos 14 días a 25 °C, retiro el día 26
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: &d26
+      moldaje: {retiro_h: 600}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 600}
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, T_agua_C: 25, durante_h: 336}
+  # Retiro el día 21 con agua 25 -> 20 -> 15 °C (cambios a los 7 y 14 días).
+  - nombre: retiro-d21-A25-20-15
+    descripcion: tubos V3-V5 hasta el retiro, agua 25 / 20 / 15 °C, retiro el día 21
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: &d21
+      moldaje: {retiro_h: 480}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 480}
+    tubos: &p21
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 492, T_agua_C: 15}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 492, T_agua_C: 15}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 492, T_agua_C: 15}]}
+  # Retiro el día 21 con agua 25 -> 20 °C (más suave junto a las caras).
+  - nombre: retiro-d21-A25-20
+    descripcion: tubos V3-V5 hasta el retiro, agua 25 / 20 °C, retiro el día 21
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *d21
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 492, T_agua_C: 20}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 492, T_agua_C: 20}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 492, T_agua_C: 20}]}
+  # Retiro el día 21 con agua más fría al final: 25 -> 15 -> 10 °C.
+  - nombre: retiro-d21-A25-15-10
+    descripcion: tubos V3-V5 hasta el retiro, agua 25 / 15 / 10 °C, retiro el día 21
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *d21
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 15}, {hasta_h: 492, T_agua_C: 10}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 15}, {hasta_h: 492, T_agua_C: 10}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 15}, {hasta_h: 492, T_agua_C: 10}]}
+  # Retiro antes (día 18) con agua 25 -> 20 -> 15 °C (cambios a los 7 y 13 días).
+  - nombre: retiro-d18-A25-20-15
+    descripcion: tubos V3-V5 hasta el retiro, agua 25 / 20 / 15 °C, retiro el día 18
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 408}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 408}
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 312, T_agua_C: 20}, {hasta_h: 420, T_agua_C: 15}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 312, T_agua_C: 20}, {hasta_h: 420, T_agua_C: 15}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 312, T_agua_C: 20}, {hasta_h: 420, T_agua_C: 15}]}
+  # Retiro más tarde (día 26) con agua 25 -> 20 -> 15 °C.
+  - nombre: retiro-d26-A25-20-15
+    descripcion: tubos V3-V5 hasta el retiro, agua 25 / 20 / 15 °C, retiro el día 26
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *d26
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 612, T_agua_C: 15}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 612, T_agua_C: 15}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 612, T_agua_C: 15}]}
+  # Como retiro-d21-A25-20-15, más tubos en V1 y V2 desde el día 7 (después del pico): enfrían también la losa.
+  - nombre: retiro-d21-A25-20-15-V12
+    descripcion: como retiro-d21-A25-20-15, más tubos en V1-V2 desde el día 7 con agua 20 / 15 °C
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas: *d21
+    tubos:
+      - {nombre: tubos_V1, vertida: 1, desde_h: 168, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 20}, {hasta_h: 336, T_agua_C: 15}]}
+      - {nombre: tubos_V2, vertida: 2, desde_h: 168, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 20}, {hasta_h: 336, T_agua_C: 15}]}
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 492, T_agua_C: 15}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 492, T_agua_C: 15}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}, {hasta_h: 492, T_agua_C: 15}]}

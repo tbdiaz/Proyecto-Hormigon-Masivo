@@ -760,9 +760,10 @@ def simular_3d(
         t_on = c.desde_h + (float(act.inicio_h[c.vertida - 1]) if c.vertida else 0.0)
         if not np.isfinite(t_on):
             continue
-        circuitos.append({"nombre": c.nombre, "circuito": c, "t_on": t_on, "t_off": t_on + c.durante_h,
+        tramos = [(t_on + a, t_on + b, T) for a, b, T in c.tramos()]
+        circuitos.append({"nombre": c.nombre, "circuito": c, "t_on": t_on, "t_off": tramos[-1][1],
                           "celdas": c.celdas, "UL_L": c.U_L(kv[c.celdas], dx) * c.largos, "m_c": c.m_c,
-                          "T_in": c.T_agua_C})
+                          "tramos": tramos})
     estado_tubos = {c["nombre"]: {"potencia_W": 0.0, "T_salida_C": np.nan, "dT_agua_max_C": np.nan, "energia_J": 0.0}
                     for c in circuitos}
     series_tubos = {c["nombre"]: {"t_h": [], "potencia_W": [], "T_salida_C": [], "dT_agua_max_C": [], "energia_J": []}
@@ -770,9 +771,13 @@ def simular_3d(
 
     def tubos_activos(t_h):
         return [c for c in circuitos if c["t_on"] - 1e-9 <= t_h < c["t_off"] - 1e-9]
+
+    def T_entrada(c, t_h):
+        """Temperatura de entrada del agua en t_h según el programa (los cambios son hitos de la integración)."""
+        return next(T for a, b, T in c["tramos"] if a - 1e-9 <= t_h < b - 1e-9)
     E_inicial = float(np.sum(np.where(activas, C * np.nan_to_num(T), 0.0))) * V
     hitos = sorted(set(guardados) | colocaciones | {t for t, _ in retiros_plan}
-                   | {t for c in circuitos for t in (c["t_on"], c["t_off"]) if 0 <= t <= duracion_h}
+                   | {t for c in circuitos for a, b, _ in c["tramos"] for t in (a, b) if 0 <= t <= duracion_h}
                    | ({t_relleno} if t_relleno is not None else set()))
 
     etapa = None
@@ -802,7 +807,7 @@ def simular_3d(
             for c in tubos_activos(t0):
                 existe = activas.reshape(-1)[c["celdas"]]
                 a = np.where(existe, np.exp(-c["UL_L"] / c["m_c"]), 1.0)
-                enfriando.append((c, a, existe))
+                enfriando.append((c, a, existe, T_entrada(c, t0)))
             difs = [np.empty([n - (e == eje) for e, n in enumerate(forma)]) for eje in range(3)]
             cortes = []
             for eje in range(3):
@@ -837,10 +842,10 @@ def simular_3d(
                 var_v[ids] += q
                 bal["hidratacion"] += float(np.sum(q)) * V * dt
                 # Tubos: el agua se calienta celda a celda; cada celda pierde lo que gana el agua.
-                for c, a, existe in enfriando:
+                for c, a, existe, T_in in enfriando:
                     Tc = Tv[c["celdas"]]
-                    Tw = agua_a_lo_largo(a, Tc, c["T_in"])
-                    T_antes = np.concatenate([[c["T_in"]], Tw[:-1]])
+                    Tw = agua_a_lo_largo(a, Tc, T_in)
+                    T_antes = np.concatenate([[T_in], Tw[:-1]])
                     qc = c["m_c"] * (Tw - T_antes)  # W que entrega cada tramo
                     np.add.at(var_v, c["celdas"], -qc / V)
                     bal["tubos"] -= float(qc.sum()) * dt

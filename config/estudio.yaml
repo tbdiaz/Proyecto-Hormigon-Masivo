@@ -13,6 +13,8 @@ salida: ../resultados/estudio
 t0: "2026-11-19T08:00"     # jueves 19 nov 2026, 08:00 hora local (America/Santiago, UTC-3), común a todos los planes
 horizonte_h: 336           # 14 días desde t0
 despues_ultima_colocacion_h: 168   # además, al menos 7 días después de la última colocación (picos tardíos)
+despues_ultimo_retiro_h: 168       # y hasta 7 días después del último retiro de moldaje o aislación: el ΔT
+                                  # que induce el retiro queda dentro de la evaluación (no se esconde)
 dx: 0.275                  # malla de exploración [m]; la propuesta se confirma con una malla más fina
 dt_max_s: 600
 guardar_cada_h: 1.0
@@ -174,6 +176,25 @@ planes:
     etapas: [[1, 2, 3, 4, 5]]
     cubiertas: *m10
     tubos: *n25
+
+  # Propuesta final (17 nov 2026), elegida de la exploración del retiro (config/retiro_tubos_era5.yaml y
+  # retiro_tubos2_era5.yaml) con la regla fijada antes de la segunda ronda: P_f <= 5 % con la corrección de malla y
+  # el mayor margen. Tubos del núcleo hasta el retiro: agua a 25 °C hasta el día 14, 20 °C hasta el 21 y 15 °C hasta
+  # el retiro de moldaje y manta el día 28 (648 h después de terminar la colocación).
+  - nombre: unica-M10-T10-N25-R28
+    descripcion: vertida única, 10 °C, manta 10 cm, tubos V3-V5 hasta el retiro (25/20/15 °C), retiro el día 28
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 648}
+    tubos: &r28
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 15}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 15}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 15}]}
 
 # Familia anterior (curvas retiradas): vertida única, 5V con esperas de 12-72 h, 8C con 24-48 h, protecciones a
 # 10 °C con manta de 5 cm, y tubos HDPE/cobre con agua a 10 °C. Queda en el historial de git (commit f15175f).

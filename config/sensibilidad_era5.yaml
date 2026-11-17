@@ -1,0 +1,41 @@
+# Sensibilidades deterministas de la propuesta final (8 curvas x 3 terciles = 24 escenarios cada una):
+#   - rhocp: el rho cp medido en las probetas (2,53 MJ/m3K) en vez del de Ju y Lei (2,33): menos conservador;
+#   - T8 / T12: hormigón colocado a 8 °C (meta de la planta) y a 12 °C (sobre el máximo admisible de 10 °C).
+#
+#   mcplan estudio config/sensibilidad_era5.yaml
+
+hereda: estudio_era5.yaml
+salida: ../resultados/sensibilidad_era5
+
+planes:
+  - nombre: unica-M10-T10-N25-R28-rhocp
+    descripcion: propuesta final con el rho cp medido en las probetas (2476 kg/m3, 1023 J/kgK)
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 648}
+    materiales: {1: {rho: 2476, cp: 1023}, 2: {rho: 2476, cp: 1023}, 3: {rho: 2476, cp: 1023}, 4: {rho: 2476, cp: 1023}, 5: {rho: 2476, cp: 1023}}
+    tubos: &r28
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 15}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 15}]}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 15}]}
+  - nombre: unica-M10-T10-N25-R28-T8
+    descripcion: propuesta final con colocación a 8 °C
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 648}
+    tubos: *r28
+  - nombre: unica-M10-T10-N25-R28-T12
+    descripcion: propuesta final con colocación a 12 °C
+    T_colocacion: 12
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 648}
+    tubos: *r28

@@ -19,7 +19,9 @@ y el calor que esa celda entrega al agua es ṁ c_w (T_w,i+1 - T_w,i).
 
 **Supuestos declarados:**
 - El tubo existe y conduce sólo en celdas ya colocadas (fuera de ellas no hay intercambio).
-- Caudal y temperatura de entrada son constantes mientras el circuito está activo.
+- El caudal es constante mientras el circuito está activo. La temperatura de entrada es constante o sigue un
+  programa por tramos (`programa`: [{hasta_h, T_agua_C}, ...], horas desde que parte el circuito), p. ej. para
+  seguir enfriando el núcleo con agua cada vez más fría antes de retirar la aislación.
 - La capacidad térmica del agua dentro del tubo es despreciable: régimen cuasi estacionario en cada paso.
 """
 
@@ -46,6 +48,7 @@ class Circuito:
     vertida: int | None = None  # el circuito parte cuando empieza esta vertida (None: desde t0)
     desde_h: float = 0.0  # después del inicio de esa vertida (o de t0)
     durante_h: float = 168.0
+    programa: list = field(default_factory=list)  # [(hasta_h, T_agua_C)] desde que parte; vacío = T_agua_C constante
     celdas: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))  # recorrido en celdas
     largos: np.ndarray = field(default_factory=lambda: np.zeros(0))  # m de tubo dentro de cada celda
 
@@ -57,6 +60,16 @@ class Circuito:
     def m_c(self) -> float:
         """ṁ c_w [W/K]: capacidad del caudal de agua."""
         return RHO_W * self.caudal_l_min / 60000.0 * C_W
+
+    def tramos(self) -> list[tuple[float, float, float]]:
+        """(desde_h, hasta_h, T_entrada) de cada tramo de operación, en horas desde que parte el circuito."""
+        if not self.programa:
+            return [(0.0, float(self.durante_h), float(self.T_agua_C))]
+        out, desde = [], 0.0
+        for hasta, T in self.programa:
+            out.append((desde, float(hasta), float(T)))
+            desde = float(hasta)
+        return out
 
     @property
     def largo_m(self) -> float:
@@ -143,6 +156,32 @@ def serpentin(dom, vertida, z, separacion=1.0, margen=0.5, direccion="x"):
     return P[:, [1, 0, 2]] if direccion == "y" else P
 
 
+def leer_programa(d: dict) -> list[tuple[float, float]]:
+    """`programa: [{hasta_h: 168, T_agua_C: 25}, {hasta_h: 336, T_agua_C: 20}]` -> [(168, 25), (336, 20)].
+
+    Las horas se cuentan desde que parte el circuito (igual que `durante_h`), crecen estrictamente y el último
+    tramo marca el fin. Con programa, `T_agua_C` y `durante_h` no se dan aparte: salen del programa.
+    """
+    tramos = d.get("programa")
+    if not tramos:
+        return []
+    if "T_agua_C" in d or "durante_h" in d:
+        raise ValueError("Un circuito con `programa` no lleva T_agua_C ni durante_h: salen del programa")
+    out, antes = [], 0.0
+    for n, t in enumerate(tramos, start=1):
+        try:
+            hasta, T = float(t["hasta_h"]), float(t["T_agua_C"])
+        except (KeyError, TypeError, ValueError):
+            raise ValueError(f"Programa del tubo, tramo {n}: necesita hasta_h y T_agua_C numéricos") from None
+        if hasta <= antes:
+            raise ValueError(f"Programa del tubo, tramo {n}: hasta_h = {hasta:g} debe ser mayor que {antes:g}")
+        if not -5.0 <= T <= 60.0:
+            raise ValueError(f"Programa del tubo, tramo {n}: T_agua_C = {T:g} °C fuera de rango (-5 a 60)")
+        out.append((hasta, T))
+        antes = hasta
+    return out
+
+
 def circuito_desde_dict(dom, d: dict, nombre_defecto="tubo") -> Circuito:
     """Lee un circuito del YAML: `puntos` explícitos o un `serpentin` {z, separacion, margen, direccion}."""
     from .simulacion3d import HORMIGON
@@ -165,11 +204,13 @@ def circuito_desde_dict(dom, d: dict, nombre_defecto="tubo") -> Circuito:
     material = d.get("material", "hdpe")
     if isinstance(material, str) and material.lower() not in K_TUBO:
         raise ValueError(f"Material de tubo desconocido: {material} (usa {', '.join(K_TUBO)} o un k en W/mK)")
+    programa = leer_programa(d)
     c = Circuito(nombre=str(d.get("nombre", nombre_defecto)), puntos=puntos, material=material,
                  diametro_mm=float(d.get("diametro_mm", 32)), espesor_mm=float(d.get("espesor_mm", 2)),
-                 caudal_l_min=float(d.get("caudal_l_min", 20)), T_agua_C=float(d.get("T_agua_C", 15)),
+                 caudal_l_min=float(d.get("caudal_l_min", 20)),
+                 T_agua_C=programa[0][1] if programa else float(d.get("T_agua_C", 15)),
                  vertida=None if vertida is None else int(vertida), desde_h=float(d.get("desde_h", 0)),
-                 durante_h=float(d.get("durante_h", 168)))
+                 durante_h=programa[-1][0] if programa else float(d.get("durante_h", 168)), programa=programa)
     c.celdas, c.largos = recorrer(dom, puntos)
     fuera = dom.material.reshape(-1)[c.celdas] != HORMIGON
     if fuera.any():

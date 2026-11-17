@@ -1,0 +1,13 @@
+# Confiabilidad de la propuesta final con las 30 temporadas reales de ERA5 (1996-2025) alineadas al 19 nov 2026:
+# cada temporada es una historia con peso 1/30. 8 curvas x 30 temporadas = 240 escenarios, evaluados hasta 7 días
+# después del retiro de las protecciones.
+#
+#   mcplan estudio config/confiabilidad_era5.yaml
+#
+# El primer plan de esta lista es la propuesta que usa scripts/articulo_f01.py.
+
+hereda: estudio_era5.yaml
+salida: ../resultados/confiabilidad_era5
+clima:
+  historias: 30
+planes: [unica-M10-T10-N25-R28]

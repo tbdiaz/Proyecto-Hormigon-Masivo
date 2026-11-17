@@ -58,7 +58,9 @@ def _asignar_propiedades(f, valores: dict) -> list[str]:
             pset = f.by_id(existente["id"])
         else:
             pset = ifcopenshell.api.pset.add_pset(f, product=producto, name=PSET_VERTIDA)
-        ifcopenshell.api.pset.edit_pset(f, pset=pset, properties=props)
+        # edit_pset va sacando del diccionario las propiedades que ya existen: se le pasa una copia para no
+        # vaciar el de quien llama.
+        ifcopenshell.api.pset.edit_pset(f, pset=pset, properties=dict(props))
         asignadas.append(nombre)
     return asignadas
 

@@ -2370,7 +2370,8 @@ def escribir(W: Informe, X: dict, R: dict):
         "modificar. Cada escenario es una fila de escenarios.csv con su peso, métricas, ubicación de los extremos y "
         "residuo de energía; la corrida de detalle deja los campos 3D en VTK para ParaView.", tam=9.5)
     W.h1("Anexo B. Property set de las vertidas en el IFC del plan")
-    filas = [[f"V{v}", f1(X["ifc_valores"][f"Vertida_0{v}"]["Inicio_h"], 2), "10",
+    filas = [[f"V{v}", f1(X["ifc_valores"][f"Vertida_0{v}"]["Inicio_h"], 2),
+              f1(X["ifc_valores"][f"Vertida_0{v}"]["TemperaturaColocacion_C"], 0),
               X["ifc_valores"][f"Vertida_0{v}"]["Moldaje"], f1(X["ifc_valores"][f"Vertida_0{v}"]["RetiroMoldaje_h"], 1)]
              for v in range(1, 6)]
     W.tabla("UANDES_HormigonMasivo en geometry/" + X["ifc"].name + " (Aislacion: manta de 10 cm con film en todas las "
@@ -2401,7 +2402,8 @@ def ifc_del_plan(X: dict) -> Path:
     for v in range(1, 6):
         ini = X["inicios"][v - 1]
         valores[f"Vertida_0{v}"] = {
-            "VertidaID": v, "Inicio_h": round(ini, 2), "TemperaturaColocacion_C": float(X["prop_cfg"].get("T_colocacion", 10)), "TipoHormigon": "M1",
+            "VertidaID": v, "Inicio_h": round(ini, 2),
+            "TemperaturaColocacion_C": float(X["prop_cfg"].get("T_colocacion", 10)), "TipoHormigon": "M1",
             "Moldaje": "Terciado fenólico 18 mm" if v in (1, 2, 5) else "Sin moldaje (cara inclinada)",
             "Aislacion": "Manta 10 cm (R = 2,5 m2K/W) con film, todas las caras expuestas",
             "RetiroMoldaje_h": round(X["t_ret"] - ini, 1)}

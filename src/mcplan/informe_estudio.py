@@ -72,7 +72,9 @@ def fig_clima(todas, elegidas, ruta, dias=14):
 
     idx = sorted((indice_frio(c), nombre) for nombre, c in todas)
     grupo = {m: h["etiqueta"] for h in elegidas for m in h["miembros"]}
-    a2.bar(range(len(idx)), [v for v, _ in idx], color=[colores.get(grupo[nm], "0.5") for _, nm in idx])
+    # Con temporadas elegidas por año, las demás no pertenecen a ningún grupo: van en gris.
+    a2.bar(range(len(idx)), [v for v, _ in idx], color=[colores.get(grupo.get(nm), "k" if nm in grupo else "0.75")
+                                                         for _, nm in idx])
     a2.set_ylim(min(v for v, _ in idx) - 0.5, max(v for v, _ in idx) + 0.5)
     a2.set_ylabel("índice de frío [°C]")
     a2.set_xlabel("historias ordenadas (media de las mínimas diarias de los primeros 7 días)")

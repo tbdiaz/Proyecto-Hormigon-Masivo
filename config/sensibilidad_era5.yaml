@@ -1,6 +1,8 @@
 # Sensibilidades deterministas de la propuesta final (8 curvas x 3 terciles = 24 escenarios cada una):
 #   - rhocp: el rho cp medido en las probetas (2,53 MJ/m3K) en vez del de Ju y Lei (2,33): menos conservador;
-#   - T8 / T12: hormigón colocado a 8 °C (meta de la planta) y a 12 °C (sobre el máximo admisible de 10 °C).
+#   - T8 / T12: hormigón colocado a 8 °C (meta de la planta) y a 12 °C (sobre el máximo admisible de 10 °C);
+#   - mantaR20 / mantaR30: manta de 10 cm con R = 2,0 y 3,0 m²K/W en vez de 2,5 (manta húmeda o de menor rendimiento,
+#     y una de mejor rendimiento). La capa se declara en el plan, sin tocar el catálogo de caso_14d.yaml.
 #
 #   mcplan estudio config/sensibilidad_era5.yaml
 
@@ -38,4 +40,22 @@ planes:
     cubiertas:
       moldaje: {retiro_h: 648}
       aislacion: {capa: manta_10cm, caras: todas, retiro_h: 648}
+    tubos: *r28
+  - nombre: unica-M10-T10-N25-R28-mantaR20
+    descripcion: propuesta final con una manta de R = 2,0 m2K/W (10 cm, k = 0,05 W/mK)
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: {nombre: manta_R20, espesor: 0.10, k: 0.05, absortividad: 0.4, emisividad: 0.9},
+                  caras: todas, retiro_h: 648}
+    tubos: *r28
+  - nombre: unica-M10-T10-N25-R28-mantaR30
+    descripcion: propuesta final con una manta de R = 3,0 m2K/W (10 cm, k = 0,0333 W/mK)
+    T_colocacion: 10
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: {nombre: manta_R30, espesor: 0.10, k: 0.0333333, absortividad: 0.4, emisividad: 0.9},
+                  caras: todas, retiro_h: 648}
     tubos: *r28

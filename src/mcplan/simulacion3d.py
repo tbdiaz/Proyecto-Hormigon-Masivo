@@ -1133,13 +1133,21 @@ def armar_cubiertas(caso: Caso3D, vox: Voxelizacion) -> PlanCubiertas:
     cubiertas = []
     for tipo, d in caso.cubiertas_cfg.items():
         nombre = d.get("capa")
-        if nombre in (None, "ninguna", "ninguno"):
+        if isinstance(nombre, dict):  # capa declarada en el plan: {espesor, k[, nombre, absortividad, emisividad]}
+            faltan = {"espesor", "k"} - set(nombre)
+            if faltan:
+                raise ValueError(f"{tipo}: a la capa le falta {', '.join(sorted(faltan))}")
+            capa = Capa(str(nombre.get("nombre", f"{tipo}_propia")), float(nombre["espesor"]), float(nombre["k"]),
+                        float(nombre.get("absortividad", 0.6)), float(nombre.get("emisividad", 0.9)))
+        elif nombre in (None, "ninguna", "ninguno"):
             continue
-        if nombre not in caso.capas:
+        elif nombre not in caso.capas:
             raise ValueError(f"{tipo}: la capa {nombre!r} no está en la sección `capas` del YAML")
+        else:
+            capa = caso.capas[nombre]
         if tipo == "aislacion_terreno":  # manta sobre el suelo alrededor de la fundación, desde t = 0
             retiro = d.get("retiro_h")
-            cubiertas.append(Cubierta(tipo, caso.capas[nombre], (SUP,), (0,),
+            cubiertas.append(Cubierta(tipo, capa, (SUP,), (0,),
                                       {0: np.inf if retiro in (None, "nunca") else float(retiro)}))
             continue
         vertidas = tuple(int(v) for v in d.get("vertidas", range(1, vox.n_vertidas + 1)))
@@ -1151,7 +1159,7 @@ def armar_cubiertas(caso: Caso3D, vox: Voxelizacion) -> PlanCubiertas:
         else:
             retiro_h = {v: float(retiro) for v in vertidas}
         caras = d.get("caras", "laterales" if tipo == "moldaje" else "superiores")
-        cubiertas.append(Cubierta(tipo, caso.capas[nombre], _CARAS[caras], vertidas, retiro_h))
+        cubiertas.append(Cubierta(tipo, capa, _CARAS[caras], vertidas, retiro_h))
     return PlanCubiertas(cubiertas)
 
 

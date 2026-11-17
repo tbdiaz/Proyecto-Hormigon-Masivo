@@ -83,7 +83,8 @@ def _pesos_curvas(cfg, nombres) -> dict:
 
 def preparar_escenarios(cfg, informar=print) -> dict:
     """Curvas, historias climáticas (con pesos), planes y su cronograma. Se calcula una vez, en el proceso principal."""
-    from .clima import historias_ensemble, historias_era5, leer_snapshot, perfil_suelo, reducir_historias, ultimo_snapshot
+    from .clima import (elegir_temporadas, historias_ensemble, historias_era5, leer_snapshot, perfil_suelo,
+                        reducir_historias, ultimo_snapshot)
     from .curvas import cargar_fuentes, huella
     from .planes import cronograma, expandir_familias
     from .simulacion3d import cargar_caso_3d, construir_dominio
@@ -133,7 +134,10 @@ def preparar_escenarios(cfg, informar=print) -> dict:
         todas = historias_era5(era5, t0, horas)
         origen_clima = {"fuente": "era5_bloques", "anios": era5["metadata"]["anios"]}
     origen_clima["climatologia"] = Path(era5["archivo"]).name
-    elegidas = reducir_historias(todas, int(cl.get("historias", 3)), float(cl.get("dias_indice", 7)))
+    if cl.get("temporadas"):  # temporadas elegidas por año, con el mismo peso (filtro de variantes)
+        elegidas = elegir_temporadas(todas, cl["temporadas"], float(cl.get("dias_indice", 7)))
+    else:
+        elegidas = reducir_historias(todas, int(cl.get("historias", 3)), float(cl.get("dias_indice", 7)))
     for h in elegidas:
         h["clave"] = h["etiqueta"]
     # suelo_inicial: "climatologia" (promedio de los años del snapshot) o "real" (el estado medido por ERA5 en el

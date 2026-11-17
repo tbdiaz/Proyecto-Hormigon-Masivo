@@ -445,6 +445,26 @@ def indice_frio(clima: Clima, dias=7) -> float:
     return float(T.min(axis=1).mean())
 
 
+def elegir_temporadas(historias, anios, dias_indice=7) -> list[dict]:
+    """Historias elegidas por año (p. ej. las temporadas críticas de un estudio), con el mismo peso cada una.
+
+    Sirve para filtrar variantes de un plan en las temporadas que gobiernan; la etiqueta es la misma que usa el
+    estudio con todas las temporadas (ERA5_2010), así las corridas son comparables.
+    """
+    pedidos = [str(a) for a in anios]
+    por_anio = {n.split()[-1]: (n, c) for n, c in historias}
+    faltan = [a for a in pedidos if a not in por_anio]
+    if faltan:
+        raise ValueError(f"Temporadas sin datos de clima: {', '.join(faltan)}")
+    elegidas = []
+    for a in pedidos:
+        n, c = por_anio[a]
+        ind = float(indice_frio(c, dias_indice))
+        elegidas.append({"nombre": n, "etiqueta": n.replace(" ", "_"), "representante": n, "clima": c,
+                         "peso": 1 / len(pedidos), "miembros": [n], "indice_C": ind, "rango_indice_C": [ind, ind]})
+    return elegidas
+
+
 def reducir_historias(historias, k=3, dias_indice=7) -> list[dict]:
     """Agrupa las historias en k terciles (o k-tiles) del índice de frío y elige un representante por grupo.
 

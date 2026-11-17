@@ -1,0 +1,31 @@
+# Evaluación completa (8 curvas x 30 temporadas) de las dos variantes candidatas de la tercera ronda de retiro.
+hereda: estudio_era5.yaml
+salida: ../resultados/confiabilidad_r3
+clima:
+  historias: 30
+planes:
+  - nombre: r3-T8-A25-20-15-10-d32
+    descripcion: 8 °C; agua 25 -> 20 -> 15 -> 10 °C; retiro el día 32
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 744}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 744}
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: &p_d32 [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 672, T_agua_C: 15},
+                           {hasta_h: 756, T_agua_C: 10}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, programa: *p_d32}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, programa: *p_d32}
+  - nombre: r3-T8-A25-20-10-d28
+    descripcion: 8 °C; agua 25 -> 20 -> 10 °C; retiro el día 28
+    T_colocacion: 8
+    etapas: [[1, 2, 3, 4, 5]]
+    cubiertas:
+      moldaje: {retiro_h: 648}
+      aislacion: {capa: manta_10cm, caras: todas, retiro_h: 648}
+    tubos:
+      - {nombre: tubos_V3, vertida: 3, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20,
+         programa: &p_20_10 [{hasta_h: 336, T_agua_C: 25}, {hasta_h: 504, T_agua_C: 20}, {hasta_h: 660, T_agua_C: 10}]}
+      - {nombre: tubos_V4, vertida: 4, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, programa: *p_20_10}
+      - {nombre: tubos_V5, vertida: 5, material: hdpe, serpentin: {separacion: 1.0}, caudal_l_min: 20, programa: *p_20_10}
